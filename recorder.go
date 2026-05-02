@@ -1,6 +1,10 @@
-package audit
+package recorder
 
-import "context"
+import (
+	"context"
+
+	"github.com/everscribe/recorder-go/pkg/event"
+)
 
 // Recorder records audit events. Implementations may be synchronous
 // (HTTPRecorder) or buffered (BufferedRecorder wraps another Recorder
@@ -16,7 +20,7 @@ import "context"
 // e.Result from the captured HTTP status when e.Result.Status is empty.
 // Callers that set e.Result explicitly win over auto-capture.
 type Recorder interface {
-	Record(ctx context.Context, e *Event) error
+	Record(ctx context.Context, e *event.Event) error
 }
 
 // BatchRecorder is an optional capability. Implementations that can
@@ -24,29 +28,29 @@ type Recorder interface {
 // should implement it. BufferedRecorder uses it when available and falls
 // back to looped Record calls otherwise.
 type BatchRecorder interface {
-	RecordBatch(ctx context.Context, events []Event) error
+	RecordBatch(ctx context.Context, events []event.Event) error
 }
 
-// RecorderOption configures the Recorder returned by NewRecorder. Both
+// RecorderOption configures the Recorder returned by New. Both
 // HTTPOption and BufferedOption satisfy RecorderOption, so existing
-// options can be passed to NewRecorder without wrapping:
+// options can be passed to New without wrapping:
 //
-//	r := audit.NewRecorder(projectID, apiKey,
-//	    audit.WithBufferSize(500),   // BufferedOption
-//	    audit.WithBaseURL(staging),  // HTTPOption
+//	r := recorder.New(projectID, apiKey,
+//	    recorder.WithBufferSize(500),   // BufferedOption
+//	    recorder.WithBaseURL(staging),  // HTTPOption
 //	)
 type RecorderOption interface {
 	applyRecorder(*recorderConfig)
 }
 
 // recorderConfig accumulates options before they are dispatched to
-// NewHTTPRecorder and NewBufferedRecorder inside NewRecorder.
+// NewHTTPRecorder and NewBufferedRecorder inside New.
 type recorderConfig struct {
 	httpOpts     []HTTPOption
 	bufferedOpts []BufferedOption
 }
 
-// NewRecorder is the recommended entry point. It returns a
+// New is the recommended entry point. It returns a
 // *BufferedRecorder that wraps an HTTPRecorder using the package's
 // default buffer/flush settings. Both HTTPOption and BufferedOption can
 // be passed via opts; each is dispatched to the appropriate inner
@@ -58,7 +62,7 @@ type recorderConfig struct {
 //
 // Call Close on the returned Recorder during shutdown to drain pending
 // events.
-func NewRecorder(projectID, apiKey string, opts ...RecorderOption) *BufferedRecorder {
+func New(projectID, apiKey string, opts ...RecorderOption) *BufferedRecorder {
 	cfg := recorderConfig{}
 	for _, opt := range opts {
 		opt.applyRecorder(&cfg)

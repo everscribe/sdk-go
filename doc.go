@@ -1,18 +1,18 @@
-// Package audit provides an append-only event recording client for the
+// Package recorder provides an append-only event recording client for the
 // audit-log ingestion API. Events capture who did what, when, on what
 // resource, and — for mutation events — how the resource changed.
 //
 // # Overview
 //
-// NewRecorder is the recommended entry point. It returns a
+// New is the recommended entry point. It returns a
 // *BufferedRecorder that wraps an HTTPRecorder using sensible defaults.
-// NewRecorder accepts both HTTPOption and BufferedOption arguments —
+// New accepts both HTTPOption and BufferedOption arguments —
 // pass either type directly, no wrapping needed.
 //
-//	rec := audit.NewRecorder(projectID, apiKey,
-//	    audit.WithBufferSize(500),
-//	    audit.WithFlushInterval(5*time.Second),
-//	    audit.WithOverflowPolicy(audit.PolicyDropNewest),
+//	rec := recorder.New(projectID, apiKey,
+//	    recorder.WithBufferSize(500),
+//	    recorder.WithFlushInterval(5*time.Second),
+//	    recorder.WithOverflowPolicy(recorder.PolicyDropNewest),
 //	)
 //	defer rec.Close()
 //
@@ -42,16 +42,16 @@
 // top of the handler, then enrich the Event as the handler runs:
 //
 //	func (s *Server) handleLockUser(w http.ResponseWriter, r *http.Request) {
-//	    e := audit.EventFromContext(r.Context())
-//	    defer s.audit.Record(r.Context(), e)
+//	    e := event.FromContext(r.Context())
+//	    defer s.recorder.Record(r.Context(), e)
 //
 //	    userID := r.PathValue("id")
 //	    e.Action = "user.lock"
-//	    e.Target = audit.Target{Type: "user", ID: userID}
+//	    e.Target = event.Target{Type: "user", ID: userID}
 //	    e.WithFields("reason", r.FormValue("reason"))
 //
 //	    if err := s.store.LockUser(r.Context(), userID); err != nil {
-//	        e.Result = audit.Result{Status: "error", Message: err}
+//	        e.Result = event.Result{Status: "error", Message: err}
 //	        http.Error(w, "...", http.StatusInternalServerError)
 //	        return
 //	    }
@@ -60,7 +60,7 @@
 //
 // The deferred Record call reads the final HTTP status from the
 // middleware-wrapped ResponseWriter (stashed on the request context by
-// audit.NewMiddleware) and auto-populates Event.Result when it is unset.
+// event.NewMiddleware) and auto-populates Event.Result when it is unset.
 // Handlers override by setting e.Result explicitly — useful for
 // POST-redirect-GET flows where HTTP status is the same on success and
 // failure.
@@ -84,7 +84,7 @@
 // WithRedactedFields with JSON pointer paths to scrub before sending:
 //
 //	e.Diff(before, after,
-//	    audit.WithRedactedFields("/password_hash", "/api_keys"),
+//	    event.WithRedactedFields("/password_hash", "/api_keys"),
 //	)
 //
 // The ingestion API computes the JSON Patch on receipt; the SDK only
@@ -95,26 +95,26 @@
 // Background jobs, cron, and CLIs use NewEvent directly — no special
 // argument changes are needed since Record only takes a context:
 //
-//	e := audit.NewEvent("subscription.trial_expired")
-//	e.Actor = audit.Actor{Type: "system", ID: "trial_expirer"}
-//	e.Target = audit.Target{Type: "subscription", ID: subID}
+//	e := event.New("subscription.trial_expired")
+//	e.Actor = event.Actor{Type: "system", ID: "trial_expirer"}
+//	e.Target = event.Target{Type: "subscription", ID: subID}
 //	_ = rec.Record(ctx, e)
 //
 // # Middleware and ActorResolver
 //
-// HTTP servers mount audit.NewMiddleware to pre-populate request contexts
+// HTTP servers mount event.NewMiddleware to pre-populate request contexts
 // with an Event template and stash the wrapped ResponseWriter for
 // status auto-capture. The middleware takes an ActorResolver that
-// derives the Actor from session state — the audit package has no
+// derives the Actor from session state — the recorder package has no
 // opinion about what a "session" is, so each server wires up a resolver
 // matching its own auth model:
 //
-//	auditMW := audit.NewMiddleware(func(ctx context.Context) audit.Actor {
+//	auditMW := event.NewMiddleware(func(ctx context.Context) event.Actor {
 //	    s, ok := session.FromContext(ctx)
 //	    if !ok {
-//	        return audit.Actor{Type: "anonymous"}
+//	        return event.Actor{Type: "anonymous"}
 //	    }
-//	    return audit.Actor{
+//	    return event.Actor{
 //	        Type:        "user",
 //	        ID:          s.UserID,
 //	        DisplayName: s.Username,
@@ -136,8 +136,8 @@
 //
 // # Multiple events per handler
 //
-// Handlers that record multiple events per request call EventFromContext
+// Handlers that record multiple events per request call FromContext
 // once per event (each call returns a fresh clone of the template)
 // and Record explicitly for each. The defer pattern is for the common
 // single-event case.
-package audit
+package recorder

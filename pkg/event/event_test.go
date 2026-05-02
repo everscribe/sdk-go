@@ -1,4 +1,4 @@
-package audit
+package event
 
 import (
 	"context"
@@ -12,21 +12,21 @@ import (
 
 func TestNewEvent_PopulatesDefaults(t *testing.T) {
 	t.Parallel()
-	e := NewEvent("user.login")
+	e := New("user.login")
 	require.NotEmpty(t, e.ID)
 	require.False(t, e.OccurredAt.IsZero())
 	require.Equal(t, "user.login", e.Action)
 }
 
-func TestEventFromContext_NoTemplate_ReturnsMinimalEvent(t *testing.T) {
+func TestFromContext_NoTemplate_ReturnsMinimalEvent(t *testing.T) {
 	t.Parallel()
-	e := EventFromContext(context.Background())
+	e := FromContext(context.Background())
 	require.NotEmpty(t, e.ID)
 	require.False(t, e.OccurredAt.IsZero())
 	require.Empty(t, e.Action)
 }
 
-func TestEventFromContext_WithTemplate_CopiesActorAndOrigin(t *testing.T) {
+func TestFromContext_WithTemplate_CopiesActorAndOrigin(t *testing.T) {
 	t.Parallel()
 	tmpl := &Event{
 		Actor:  Actor{Type: "user", ID: "u1", DisplayName: "alice", Email: "a@b"},
@@ -34,20 +34,20 @@ func TestEventFromContext_WithTemplate_CopiesActorAndOrigin(t *testing.T) {
 	}
 	ctx := context.WithValue(context.Background(), eventTemplateKey{}, tmpl)
 
-	e := EventFromContext(ctx)
+	e := FromContext(ctx)
 	require.Equal(t, tmpl.Actor, e.Actor)
 	require.Equal(t, tmpl.Origin, e.Origin)
 	require.NotEmpty(t, e.ID)
 	require.False(t, e.OccurredAt.IsZero())
 }
 
-func TestEventFromContext_ReturnsIndependentClones(t *testing.T) {
+func TestFromContext_ReturnsIndependentClones(t *testing.T) {
 	t.Parallel()
 	tmpl := &Event{Actor: Actor{Type: "user", ID: "u1"}}
 	ctx := context.WithValue(context.Background(), eventTemplateKey{}, tmpl)
 
-	e1 := EventFromContext(ctx)
-	e2 := EventFromContext(ctx)
+	e1 := FromContext(ctx)
+	e2 := FromContext(ctx)
 
 	require.NotEqual(t, e1.ID, e2.ID, "each call should produce a unique ID")
 
@@ -58,7 +58,7 @@ func TestEventFromContext_ReturnsIndependentClones(t *testing.T) {
 	require.Nil(t, tmpl.Metadata, "template should be untouched")
 }
 
-func TestEventFromContext_MetadataIsolation(t *testing.T) {
+func TestFromContext_MetadataIsolation(t *testing.T) {
 	t.Parallel()
 	tmpl := &Event{
 		Actor:    Actor{Type: "user"},
@@ -66,8 +66,8 @@ func TestEventFromContext_MetadataIsolation(t *testing.T) {
 	}
 	ctx := context.WithValue(context.Background(), eventTemplateKey{}, tmpl)
 
-	e := EventFromContext(ctx)
-	// EventFromContext nils metadata so each event owns its own map.
+	e := FromContext(ctx)
+	// FromContext nils metadata so each event owns its own map.
 	require.Nil(t, e.Metadata)
 	e.WithField("own", "value")
 	require.NotContains(t, e.Metadata, "shared")
@@ -181,7 +181,7 @@ func TestEvent_Diff(t *testing.T) {
 			if len(tc.redactPaths) > 0 {
 				opts = append(opts, WithRedactedFields(tc.redactPaths...))
 			}
-			e := NewEvent("user.update").Diff(tc.before, tc.after, opts...)
+			e := New("user.update").Diff(tc.before, tc.after, opts...)
 
 			require.NotNil(t, e.Change)
 			require.JSONEq(t, tc.wantBefore, string(e.Change.Before))
@@ -193,7 +193,7 @@ func TestEvent_Diff(t *testing.T) {
 
 func TestEvent_Diff_ReturnsReceiverForChaining(t *testing.T) {
 	t.Parallel()
-	e := NewEvent("user.update")
+	e := New("user.update")
 	require.Same(t, e, e.Diff(map[string]any{}, map[string]any{}))
 }
 
@@ -227,7 +227,7 @@ func TestEvent_RawDiff(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			e := NewEvent("x").RawDiff(tc.before, tc.after, tc.patch)
+			e := New("x").RawDiff(tc.before, tc.after, tc.patch)
 			if !tc.wantChangeNonNil {
 				require.Nil(t, e.Change)
 				return

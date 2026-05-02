@@ -1,4 +1,4 @@
-# audit-go
+# recorder-go
 
 Go client for the Everscribe audit-log ingestion API. Records who did
 what, when, on what resource, and — for mutation events — how the
@@ -22,12 +22,18 @@ Single runtime dependency (`github.com/google/uuid`). Requires Go 1.25+.
 ## Install
 
 ```sh
-go get github.com/everscribe/audit-go
+go get github.com/everscribe/recorder-go
 ```
 
 ```go
-import "github.com/everscribe/audit-go"
+import (
+    "github.com/everscribe/recorder-go"            // Recorder, BufferedRecorder, HTTPRecorder, New
+    "github.com/everscribe/recorder-go/pkg/event"  // Event, Actor, Target, Result, NewMiddleware
+)
 ```
+
+The root package owns the recorder implementations; `pkg/event` owns
+the event/result domain types and the HTTP middleware.
 
 ---
 
@@ -36,22 +42,22 @@ import "github.com/everscribe/audit-go"
 ### 1. Initialize a Recorder
 
 ```go
-rec := audit.NewRecorder(projectID, apiKey)
+rec := recorder.New(projectID, apiKey)
 defer rec.Close()
 ```
 
 `Close` drains pending events on shutdown.
 
-`NewRecorder` returns a recorder with sane defaults. 
+`New` returns a recorder with sane defaults. 
 
 Override any of
 them by passing options:
 
 ```go
-rec := audit.NewRecorder(projectID, apiKey,
-    audit.WithBufferSize(2000),
-    audit.WithFlushInterval(2*time.Second),
-    audit.WithOverflowPolicy(audit.PolicyBlock),
+rec := recorder.New(projectID, apiKey,
+    recorder.WithBufferSize(2000),
+    recorder.WithFlushInterval(2*time.Second),
+    recorder.WithOverflowPolicy(recorder.PolicyBlock),
 )
 ```
 
@@ -73,10 +79,10 @@ rec := audit.NewRecorder(projectID, apiKey,
 Your `ActorResolver` function should have the following signature:
 
 ```go
-type ActorResolver func(ctx context.Context) audit.Actor
+type ActorResolver func(ctx context.Context) event.Actor
 ```
 
-The resolver bridges session-provisioned request context to an `audit.Actor`.
+The resolver bridges session-provisioned request context to an `event.Actor`.
 
 So lets say your middleware for provisioninig the request context looks like:
 
@@ -115,16 +121,16 @@ You would then define an `actorResolver` like this:
 
 ```go
 // Reads what sessionMW attached and returns an Actor.
-actorResolver := func(ctx context.Context) audit.Actor {
+actorResolver := func(ctx context.Context) event.Actor {
     s, ok := ctx.Value(sessionKey{}).(Session)
     if !ok {
-        return audit.Actor{Type: "anonymous"}
+        return event.Actor{Type: "anonymous"}
     }
     actorType := "user"
     if s.IsAdmin {
         actorType = "admin"
     }
-    return audit.Actor{
+    return event.Actor{
         Type:        actorType,
         ID:          s.UserID,
         DisplayName: s.Username,
@@ -142,7 +148,7 @@ the producer (`sessionMW` above) has to run before the consumer (the
 audit middleware, which calls your `actorResolver`):
 
 ```go
-auditMw := audit.NewMiddleware(actorResolver)
+auditMw := event.NewMiddleware(actorResolver)
 
 // ✅ Session attaches identity first, then audit reads it.
 handler := sessionMW(auditMw(mux))
@@ -157,7 +163,7 @@ handler := auditMw(sessionMW(mux))
 ```go
 http.Handle("POST /api-keys", auditMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
     ctx := r.Context()
-    e := audit.EventFromContext(ctx)
+    e := event.FromContext(ctx)
     defer rec.Record(ctx, e)
 
     e.Action = "api_key.create"
@@ -167,7 +173,7 @@ http.Handle("POST /api-keys", auditMw(http.HandlerFunc(func(w http.ResponseWrite
         http.Error(w, err.Error(), http.StatusInternalServerError)
         return // Action set, but Result auto-captures as {error, 500}.
     }
-    e.Target = audit.Target{Type: "api_key", ID: key.ID}
+    e.Target = event.Target{Type: "api_key", ID: key.ID}
 
     w.WriteHeader(http.StatusCreated)
 })))
@@ -179,12 +185,12 @@ For mutation events, attach the before/after state with `Diff`.
 ```go
 http.Handle("PATCH /users/{id}", auditMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
     ctx := r.Context()
-    e := audit.EventFromContext(ctx)
+    e := event.FromContext(ctx)
     defer rec.Record(ctx, e)
 
     userID := r.PathValue("id")
     e.Action = "user.update"
-    e.Target = audit.Target{Type: "user", ID: userID}
+    e.Target = event.Target{Type: "user", ID: userID}
 
     user, err := loadUser(ctx, userID) // returns *User
     if err != nil {
@@ -203,7 +209,7 @@ http.Handle("PATCH /users/{id}", auditMw(http.HandlerFunc(func(w http.ResponseWr
 
     e.Diff(before, *after, 
         // Redact sensitive fields from the diff
-        audit.WithRedactedFields("/password_hash"),
+        event.WithRedactedFields("/password_hash"),
     )
     w.WriteHeader(http.StatusOK)
 })))
@@ -224,7 +230,7 @@ Some handlers fan out — one privileged operation can affect many
 resources, and each one is independently audit-worthy. A common
 incident-response example is revoking every active session for a
 compromised account: investigators need to see *which* sessions were
-killed, not just that a bulk action ran. Call `EventFromContext` once
+killed, not just that a bulk action ran. Call `FromContext` once
 per event so each gets a fresh clone of the per-request template
 (Actor, Origin) without sharing or mutating metadata:
 
@@ -240,13 +246,13 @@ http.Handle("POST /users/{id}/sessions/revoke-all", auditMw(http.HandlerFunc(fun
     }
 
     for _, s := range sessions {
-        e := audit.EventFromContext(ctx) // fresh clone per session
+        e := event.FromContext(ctx) // fresh clone per session
         e.Action = "session.revoke"
-        e.Target = audit.Target{Type: "session", ID: s.ID}
+        e.Target = event.Target{Type: "session", ID: s.ID}
         e.WithFields("user_id", userID, "reason", r.FormValue("reason"))
 
         if err := revokeSession(ctx, s.ID); err != nil {
-            e.Result = audit.Result{Status: "error", Message: err}
+            e.Result = event.Result{Status: "error", Message: err}
         }
         _ = rec.Record(ctx, e)
     }
@@ -265,11 +271,12 @@ ingestion API on each flush — no need to assemble batches yourself.
 
 ```go
 http.Handle("POST /users/{id}/lock", auditMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-    e := audit.EventFromContext(r.Context())
-    defer rec.Record(r.Context(), e)
+    ctx := r.Context()
+    e := event.FromContext(ctx)
+    defer rec.Record(ctx, e)
 
     userID := r.PathValue("id")
-    user, err := loadUser(r.Context(), userID)
+    user, err := loadUser(ctx, userID)
     if err != nil {
         http.Error(w, "not found", http.StatusNotFound)
         return // No Action was set - we don't care about recording audit logs for attempts to lock a user account that does not exist.
@@ -280,9 +287,9 @@ http.Handle("POST /users/{id}/lock", auditMw(http.HandlerFunc(func(w http.Respon
     }
 
     e.Action = "user.lock"
-    e.Target = audit.Target{Type: "user", ID: userID}
+    e.Target = event.Target{Type: "user", ID: userID}
 
-    if err := lockUser(r.Context(), userID); err != nil {
+    if err := lockUser(ctx, userID); err != nil {
         http.Error(w, err.Error(), http.StatusInternalServerError)
         return
     }
@@ -300,10 +307,11 @@ succeeds:
 
 ```go
 http.Handle("POST /login", auditMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-    e := audit.EventFromContext(r.Context())
-    defer rec.Record(r.Context(), e)
+    ctx := r.Context()
+    e := event.FromContext(ctx)
+    defer rec.Record(ctx, e)
 
-    user, err := authenticate(r.Context(), r) // your auth check
+    user, err := authenticate(ctx, r) // your auth check
     if err != nil {
         // Failed login: actor stays "anonymous" from the resolver.
         // Capture the attempted identifier for investigators.
@@ -315,7 +323,7 @@ http.Handle("POST /login", auditMw(http.HandlerFunc(func(w http.ResponseWriter, 
 
     // Successful login: override the resolver's "anonymous" with the
     // user we just authenticated.
-    e.Actor = audit.Actor{
+    e.Actor = event.Actor{
         Type:        "user",
         ID:          user.ID,
         DisplayName: user.Username,
@@ -338,28 +346,29 @@ monitoring still needs to know which actually happened — repeated
 
 ```go
 http.Handle("POST /password/reset", auditMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-    e := audit.EventFromContext(r.Context())
-    defer rec.Record(r.Context(), e)
+    ctx := r.Context()
+    e := event.FromContext(ctx)
+    defer rec.Record(ctx, e)
 
     email := r.FormValue("email")
     e.Action = "password.reset_requested"
     e.WithFields("attempted_email", email)
 
-    user, found := lookupByEmail(r.Context(), email)
+    user, found := lookupByEmail(ctx, email)
     if !found {
         // Explicitly set a denied status  instead of letting the
         // recorder auto-set it based on http status code.
-        e.Result = audit.Result{Status: "denied", Message: "no account for email"}
+        e.Result = event.Result{Status: "denied", Message: "no account for email"}
         http.Redirect(w, r, "/password/check-your-email", http.StatusSeeOther)
         return
     }
 
-    if err := sendResetEmail(r.Context(), user); err != nil {
-        e.Result = audit.Result{Status: "error", Message: err}
+    if err := sendResetEmail(ctx, user); err != nil {
+        e.Result = event.Result{Status: "error", Message: err}
         http.Redirect(w, r, "/password/check-your-email", http.StatusSeeOther)
         return
     }
-    e.Target = audit.Target{Type: "user", ID: user.ID}
+    e.Target = event.Target{Type: "user", ID: user.ID}
     http.Redirect(w, r, "/password/check-your-email", http.StatusSeeOther)
     // happy path: auto-captures as {ok, 303}.
 })))
@@ -385,7 +394,7 @@ type Event struct {
 }
 ```
 
-`projectID` is set once at `NewRecorder` and sent on every request.
+`projectID` is set once at `New` and sent on every request.
 
 `TenantID` groups events one level above the actor — set it when you
 run a multi-tenant SaaS and want events queryable per workspace, org,
@@ -397,7 +406,7 @@ dashboards) leave it blank.
 directly and it marshals as the result of `err.Error()`:
 
 ```go
-e.Result = audit.Result{Status: "error", Message: err}
+e.Result = event.Result{Status: "error", Message: err}
 ```
 
 Two helpers attach metadata in slog style:
@@ -410,9 +419,9 @@ e.WithFields("reason", "spam", "severity", "high", "count", 3)
 For non-HTTP callers, build events directly:
 
 ```go
-e := audit.NewEvent("subscription.trial_expired")
-e.Actor = audit.Actor{Type: "system", ID: "trial_expirer"}
-e.Target = audit.Target{Type: "subscription", ID: subID}
+e := event.New("subscription.trial_expired")
+e.Actor = event.Actor{Type: "system", ID: "trial_expirer"}
+e.Target = event.Target{Type: "subscription", ID: subID}
 _ = rec.Record(ctx, e)
 ```
 
@@ -420,7 +429,7 @@ _ = rec.Record(ctx, e)
 
 ## BufferedRecorder
 
-`NewRecorder` returns a `*BufferedRecorder` — events enqueue on an
+`New` returns a `*BufferedRecorder` — events enqueue on an
 internal channel and a background goroutine flushes batches to the
 HTTP recorder when the size threshold or flush interval is reached.
 Tuning knobs live in the [Quickstart options table](#1-initialize-a-recorder);
@@ -474,7 +483,7 @@ enable `WithAutoIdempotencyKey`. It copies `Event.ID` into
 `IdempotencyKey` at send time when the key is empty:
 
 ```go
-rec := audit.NewRecorder(projectID, apiKey, audit.WithAutoIdempotencyKey())
+rec := recorder.New(projectID, apiKey, recorder.WithAutoIdempotencyKey())
 ```
 
 Off by default. Caller-supplied keys always win — auto-population

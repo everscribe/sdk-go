@@ -1,4 +1,4 @@
-package audit
+package recorder
 
 import (
 	"bytes"
@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/everscribe/recorder-go/pkg/event"
 )
 
 // defaultBaseURL is the production ingestion endpoint. Tests and staging
@@ -47,7 +49,7 @@ type HTTPRecorder struct {
 }
 
 // HTTPOption configures HTTPRecorder. HTTPOption also satisfies
-// RecorderOption, so it can be passed directly to NewRecorder.
+// RecorderOption, so it can be passed directly to New.
 type HTTPOption func(*HTTPRecorder)
 
 // applyRecorder lets HTTPOption satisfy RecorderOption — see recorder.go.
@@ -69,7 +71,7 @@ func WithBaseURL(url string) HTTPOption {
 
 // WithAutoIdempotencyKey makes the recorder copy Event.ID into
 // Event.IdempotencyKey at send time when IdempotencyKey is empty. This
-// gives in-process safety against double-sends of the same *Event
+// gives in-process safety against double-sends of the same *event.Event
 // without callers having to think about it.
 //
 // Callers who set IdempotencyKey explicitly (e.g., to a webhook event
@@ -96,31 +98,31 @@ func NewHTTPRecorder(projectID, apiKey string, opts ...HTTPOption) *HTTPRecorder
 }
 
 // Record implements Recorder.
-func (l *HTTPRecorder) Record(ctx context.Context, e *Event) error {
+func (l *HTTPRecorder) Record(ctx context.Context, e *event.Event) error {
 	if e == nil || e.Action == "" {
 		return nil
 	}
-	prepareEvent(ctx, e)
+	event.PrepareEvent(ctx, e)
 	l.finalize(e)
 	body, err := json.Marshal(e)
 	if err != nil {
-		return fmt.Errorf("audit: marshal event: %w", err)
+		return fmt.Errorf("recorder: marshal event: %w", err)
 	}
 	return l.post(ctx, l.eventsPath(), body)
 }
 
 // RecordBatch implements BatchRecorder. Filters out empty-Action events
 // before posting.
-func (l *HTTPRecorder) RecordBatch(ctx context.Context, events []Event) error {
+func (l *HTTPRecorder) RecordBatch(ctx context.Context, events []event.Event) error {
 	if len(events) == 0 {
 		return nil
 	}
-	filtered := make([]Event, 0, len(events))
+	filtered := make([]event.Event, 0, len(events))
 	for i := range events {
 		if events[i].Action == "" {
 			continue
 		}
-		prepareEvent(ctx, &events[i])
+		event.PrepareEvent(ctx, &events[i])
 		l.finalize(&events[i])
 		filtered = append(filtered, events[i])
 	}
@@ -128,19 +130,19 @@ func (l *HTTPRecorder) RecordBatch(ctx context.Context, events []Event) error {
 		return nil
 	}
 	body, err := json.Marshal(struct {
-		Events []Event `json:"events"`
+		Events []event.Event `json:"events"`
 	}{Events: filtered})
 	if err != nil {
-		return fmt.Errorf("audit: marshal batch: %w", err)
+		return fmt.Errorf("recorder: marshal batch: %w", err)
 	}
 	return l.post(ctx, l.batchPath(), body)
 }
 
-// finalize applies recorder-config-dependent fixups after prepareEvent.
+// finalize applies recorder-config-dependent fixups after PrepareEvent.
 // Currently just copies ID into IdempotencyKey when WithAutoIdempotencyKey
 // is enabled; centralized so future per-recorder finalization steps
 // have one place to live.
-func (l *HTTPRecorder) finalize(e *Event) {
+func (l *HTTPRecorder) finalize(e *event.Event) {
 	if l.autoIdempotencyKey && e.IdempotencyKey == "" {
 		e.IdempotencyKey = e.ID
 	}
@@ -157,14 +159,14 @@ func (l *HTTPRecorder) batchPath() string {
 func (l *HTTPRecorder) post(ctx context.Context, path string, body []byte) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, l.baseURL+path, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("audit: build request: %w", err)
+		return fmt.Errorf("recorder: build request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+l.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := l.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("audit: post: %w", err)
+		return fmt.Errorf("recorder: post: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -189,7 +191,7 @@ type HTTPError struct {
 }
 
 func (e *HTTPError) Error() string {
-	return fmt.Sprintf("audit: http %d: %s", e.StatusCode, e.Body)
+	return fmt.Sprintf("recorder: http %d: %s", e.StatusCode, e.Body)
 }
 
 // Transient reports whether the error is likely to resolve on retry

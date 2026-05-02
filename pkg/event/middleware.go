@@ -1,4 +1,4 @@
-package audit
+package event
 
 import (
 	"context"
@@ -10,7 +10,7 @@ type wrappedWriterKey struct{}
 
 // NewMiddleware returns an http middleware that installs an Event
 // template on the request context for downstream handlers to retrieve
-// via EventFromContext. The template has Origin populated from the
+// via FromContext. The template has Origin populated from the
 // request and Actor populated by the resolver.
 //
 // Handlers typically defer Recorder.Record at the top of the handler,
@@ -47,7 +47,7 @@ func NewMiddleware(resolve ActorResolver) func(http.Handler) http.Handler {
 }
 
 // ActorResolver derives an Actor from request context. Typically reads
-// session data attached by an upstream auth middleware. The audit package
+// session data attached by an upstream auth middleware. The recorder package
 // does not know about any specific session type — each server wires up
 // a resolver that matches its own auth model.
 type ActorResolver func(ctx context.Context) Actor

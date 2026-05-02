@@ -1,4 +1,4 @@
-package audit
+package event
 
 import (
 	"context"
@@ -16,7 +16,7 @@ func TestMiddleware_InstallsTemplate(t *testing.T) {
 		return Actor{Type: "user", ID: "u1", DisplayName: "alice"}
 	}
 	handler := NewMiddleware(resolver)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got = EventFromContext(r.Context())
+		got = FromContext(r.Context())
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -38,7 +38,7 @@ func TestMiddleware_NilResolverDefaultsToAnonymous(t *testing.T) {
 	t.Parallel()
 	var got *Event
 	handler := NewMiddleware(nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got = EventFromContext(r.Context())
+		got = FromContext(r.Context())
 		w.WriteHeader(http.StatusOK)
 	}))
 	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
@@ -50,7 +50,7 @@ func TestMiddleware_StashesWrappedWriterOnContext(t *testing.T) {
 	var seenStatus int
 	handler := NewMiddleware(nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTeapot)
-		// After WriteHeader runs, prepareEvent (called via Recorder.Record)
+		// After WriteHeader runs, PrepareEvent (called via Recorder.Record)
 		// should be able to pull the wrapped writer from context and read
 		// the captured status.
 		rw, ok := r.Context().Value(wrappedWriterKey{}).(*responseWriter)

@@ -1,4 +1,4 @@
-module github.com/everscribe/audit-go
+module github.com/everscribe/recorder-go
 
 go 1.25.0
 

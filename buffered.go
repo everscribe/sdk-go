@@ -1,4 +1,4 @@
-package audit
+package recorder
 
 import (
 	"context"
@@ -7,6 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/everscribe/recorder-go/pkg/event"
 )
 
 // Errors returned by Recorder implementations.
@@ -14,7 +16,7 @@ var (
 	// ErrBufferFull is returned by BufferedRecorder when its overflow
 	// policy is PolicyError and the buffer has no space. Other overflow
 	// policies do not return this error.
-	ErrBufferFull = errors.New("audit: buffer full")
+	ErrBufferFull = errors.New("recorder: buffer full")
 )
 
 // OverflowPolicy controls BufferedRecorder's behavior when Record is
@@ -41,7 +43,7 @@ const (
 )
 
 // BufferedOption configures a BufferedRecorder. BufferedOption also
-// satisfies RecorderOption, so it can be passed directly to NewRecorder.
+// satisfies RecorderOption, so it can be passed directly to New.
 type BufferedOption func(*bufferedConfig)
 
 // applyRecorder lets BufferedOption satisfy RecorderOption — see recorder.go.
@@ -132,7 +134,7 @@ func WithSlogLogger(l *slog.Logger) BufferedOption {
 type BufferedRecorder struct {
 	inner  Recorder
 	cfg    bufferedConfig
-	events chan Event
+	events chan event.Event
 
 	dropped   atomic.Int64
 	flushed   atomic.Int64
@@ -154,7 +156,7 @@ func NewBufferedRecorder(inner Recorder, opts ...BufferedOption) *BufferedRecord
 	b := &BufferedRecorder{
 		inner:    inner,
 		cfg:      cfg,
-		events:   make(chan Event, cfg.bufferSize),
+		events:   make(chan event.Event, cfg.bufferSize),
 		flushReq: make(chan chan error),
 		done:     make(chan struct{}),
 		stop:     make(chan struct{}),
@@ -165,7 +167,7 @@ func NewBufferedRecorder(inner Recorder, opts ...BufferedOption) *BufferedRecord
 
 // Record implements Recorder. Behavior when the buffer is full depends
 // on the configured OverflowPolicy. Empty-Action events are no-ops.
-func (b *BufferedRecorder) Record(ctx context.Context, e *Event) error {
+func (b *BufferedRecorder) Record(ctx context.Context, e *event.Event) error {
 	if e == nil || e.Action == "" {
 		return nil
 	}
@@ -175,7 +177,7 @@ func (b *BufferedRecorder) Record(ctx context.Context, e *Event) error {
 		return nil
 	default:
 	}
-	prepareEvent(ctx, e)
+	event.PrepareEvent(ctx, e)
 
 	switch b.cfg.overflow {
 	case PolicyBlock:
@@ -203,7 +205,7 @@ func (b *BufferedRecorder) Record(ctx context.Context, e *Event) error {
 		default:
 			n := b.dropped.Add(1)
 			if n == 1 || n%1000 == 0 {
-				b.cfg.logger.Warn("audit buffer full, event dropped",
+				b.cfg.logger.Warn("recorder buffer full, event dropped",
 					"action", e.Action,
 					"dropped_total", n,
 					"buffer_size", cap(b.events))
@@ -284,7 +286,7 @@ type BufferedStats struct {
 func (b *BufferedRecorder) run() {
 	defer close(b.done)
 
-	batch := make([]Event, 0, b.cfg.flushSize)
+	batch := make([]event.Event, 0, b.cfg.flushSize)
 	ticker := time.NewTicker(b.cfg.flushInterval)
 	defer ticker.Stop()
 
@@ -342,7 +344,7 @@ func (b *BufferedRecorder) run() {
 	}
 }
 
-func (b *BufferedRecorder) flushBatch(batch []Event) error {
+func (b *BufferedRecorder) flushBatch(batch []event.Event) error {
 	n := len(batch)
 	if n == 0 {
 		return nil
@@ -363,7 +365,7 @@ func (b *BufferedRecorder) flushBatch(batch []Event) error {
 	}
 	if err != nil {
 		b.flushErrs.Add(1)
-		b.cfg.logger.Error("audit flush failed",
+		b.cfg.logger.Error("recorder flush failed",
 			"error", err,
 			"batch_size", n,
 			"flush_errs_total", b.flushErrs.Load())

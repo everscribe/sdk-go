@@ -1,4 +1,4 @@
-package audit
+package event
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 )
 
 // Event is the canonical audit record. Construct via NewEvent (non-HTTP)
-// or EventFromContext (HTTP, after NewMiddleware has run), populate the handler-
+// or FromContext (HTTP, after NewMiddleware has run), populate the handler-
 // specific fields (Action, Target, Metadata, optionally Result), and pass
 // to Recorder.Record.
 type Event struct {
@@ -61,11 +61,11 @@ type Origin struct {
 	RequestID string `json:"request_id,omitempty"`
 }
 
-// NewEvent returns a new Event with ID, OccurredAt, and Action populated.
+// New returns a new Event with ID, OccurredAt, and Action populated.
 // Use for non-HTTP callers (background jobs, cron, CLI). HTTP handlers
-// should prefer EventFromContext, which additionally populates Origin and
+// should prefer FromContext, which additionally populates Origin and
 // Actor from the request.
-func NewEvent(action string) *Event {
+func New(action string) *Event {
 	return &Event{
 		ID:         uuid.NewString(),
 		OccurredAt: time.Now().UTC(),
@@ -73,15 +73,15 @@ func NewEvent(action string) *Event {
 	}
 }
 
-// EventFromContext returns a fresh Event pre-populated from the request-scoped
+// FromContext returns a fresh Event pre-populated from the request-scoped
 // template installed by NewMiddleware. If no template is present (middleware
 // not mounted, or called outside the request path), returns a minimal
 // Event equivalent to NewEvent("").
 //
 // Each call returns an independent Event — mutating the returned value
 // does not affect other events derived from the same context. Handlers
-// that record multiple events per request call EventFromContext once per event.
-func EventFromContext(ctx context.Context) *Event {
+// that record multiple events per request call FromContext once per event.
+func FromContext(ctx context.Context) *Event {
 	tmpl, ok := ctx.Value(eventTemplateKey{}).(*Event)
 	if !ok || tmpl == nil {
 		return &Event{
@@ -142,7 +142,7 @@ type eventDiffConfig struct {
 // logs: password hashes, API keys, PII.
 //
 //	e.Diff(before, after,
-//	    audit.WithRedactedFields("/password_hash", "/api_keys/0"),
+//	    recorder.WithRedactedFields("/password_hash", "/api_keys/0"),
 //	)
 //
 // Paths that don't exist in the document are silently skipped.
@@ -191,10 +191,12 @@ func (e *Event) RawDiff(before, after, patch json.RawMessage) *Event {
 	return e
 }
 
-// prepareEvent fills defaults: ID if empty, OccurredAt if zero,
-// Result auto-captured from the middleware-wrapped ResponseWriter
-// stashed in ctx when Result is unset.
-func prepareEvent(ctx context.Context, e *Event) {
+// PrepareEvent fills defaults on e: ID if empty, OccurredAt if zero,
+// and Result auto-captured from the middleware-wrapped ResponseWriter
+// stashed in ctx when Result is unset. Recorder implementations call
+// this on each Event before persisting so handlers can rely on
+// auto-populated fields.
+func PrepareEvent(ctx context.Context, e *Event) {
 	if e.ID == "" {
 		e.ID = uuid.NewString()
 	}

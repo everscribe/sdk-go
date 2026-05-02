@@ -1,4 +1,4 @@
-package audit
+package recorder
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/everscribe/recorder-go/pkg/event"
 	"github.com/stretchr/testify/require"
 )
 
@@ -18,7 +19,7 @@ func TestHTTPRecorder_Record_PostsSingleEvent(t *testing.T) {
 	t.Parallel()
 
 	var gotPath, gotAuth, gotContentType string
-	var gotBody Event
+	var gotBody event.Event
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotAuth = r.Header.Get("Authorization")
@@ -30,8 +31,8 @@ func TestHTTPRecorder_Record_PostsSingleEvent(t *testing.T) {
 	defer srv.Close()
 
 	rec := NewHTTPRecorder(testProjectID, "secret-key", WithBaseURL(srv.URL))
-	e := NewEvent("user.login")
-	e.Actor = Actor{Type: "user", ID: "u1"}
+	e := event.New("user.login")
+	e.Actor = event.Actor{Type: "user", ID: "u1"}
 	require.NoError(t, rec.Record(context.Background(), e))
 
 	require.Equal(t, "/v1/projects/"+testProjectID+"/events", gotPath)
@@ -52,7 +53,7 @@ func TestHTTPRecorder_Record_EmptyActionIsNoOp(t *testing.T) {
 	defer srv.Close()
 
 	rec := NewHTTPRecorder(testProjectID, "k", WithBaseURL(srv.URL))
-	require.NoError(t, rec.Record(context.Background(), &Event{}))
+	require.NoError(t, rec.Record(context.Background(), &event.Event{}))
 	require.False(t, hit)
 }
 
@@ -61,7 +62,7 @@ func TestHTTPRecorder_RecordBatch(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		events     []Event
+		events     []event.Event
 		wantHit    bool
 		wantPath   string
 		wantCount  int
@@ -70,9 +71,9 @@ func TestHTTPRecorder_RecordBatch(t *testing.T) {
 	}{
 		{
 			name: "posts array body with project-scoped batch path",
-			events: []Event{
-				{Action: "user.login", Actor: Actor{Type: "user", ID: "u1"}},
-				{Action: "user.logout", Actor: Actor{Type: "user", ID: "u1"}},
+			events: []event.Event{
+				{Action: "user.login", Actor: event.Actor{Type: "user", ID: "u1"}},
+				{Action: "user.logout", Actor: event.Actor{Type: "user", ID: "u1"}},
 			},
 			wantHit:    true,
 			wantPath:   "/v1/projects/" + testProjectID + "/events/batch",
@@ -82,7 +83,7 @@ func TestHTTPRecorder_RecordBatch(t *testing.T) {
 		},
 		{
 			name: "filters out empty action events",
-			events: []Event{
+			events: []event.Event{
 				{Action: "user.login"},
 				{Action: ""},
 				{Action: "user.logout"},
@@ -100,7 +101,7 @@ func TestHTTPRecorder_RecordBatch(t *testing.T) {
 		},
 		{
 			name:    "empty slice is no-op",
-			events:  []Event{},
+			events:  []event.Event{},
 			wantHit: false,
 		},
 	}
@@ -112,7 +113,7 @@ func TestHTTPRecorder_RecordBatch(t *testing.T) {
 				hit     bool
 				gotPath string
 				gotBody struct {
-					Events []Event `json:"events"`
+					Events []event.Event `json:"events"`
 				}
 			)
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -172,7 +173,7 @@ func TestHTTPRecorder_Record_ErrorStatusClassification(t *testing.T) {
 			defer srv.Close()
 
 			rec := NewHTTPRecorder(testProjectID, "k", WithBaseURL(srv.URL))
-			err := rec.Record(context.Background(), NewEvent("test"))
+			err := rec.Record(context.Background(), event.New("test"))
 			require.Error(t, err)
 
 			var httpErr *HTTPError
@@ -197,7 +198,7 @@ func TestHTTPRecorder_WithBaseURL_TrimsTrailingSlash(t *testing.T) {
 	defer srv.Close()
 
 	rec := NewHTTPRecorder(testProjectID, "k", WithBaseURL(srv.URL+"/"))
-	require.NoError(t, rec.Record(context.Background(), NewEvent("t")))
+	require.NoError(t, rec.Record(context.Background(), event.New("t")))
 	require.Equal(t, "/v1/projects/"+testProjectID+"/events", gotPath)
 }
 
@@ -235,7 +236,7 @@ func TestHTTPRecorder_AutoIdempotencyKey(t *testing.T) {
 		opt     []HTTPOption
 		preset  string // pre-set IdempotencyKey on the event before Record
 		wantSet bool   // expect IdempotencyKey populated server-side
-		wantEq  string // when wantSet is true and preset is "", IdempotencyKey should equal Event.ID
+		wantEq  string // when wantSet is true and preset is "", IdempotencyKey should equal event.Event.ID
 	}{
 		{
 			name:    "off by default - leaves IdempotencyKey empty",
@@ -243,7 +244,7 @@ func TestHTTPRecorder_AutoIdempotencyKey(t *testing.T) {
 			wantSet: false,
 		},
 		{
-			name:    "enabled - copies Event.ID into IdempotencyKey",
+			name:    "enabled - copies event.Event.ID into IdempotencyKey",
 			opt:     []HTTPOption{WithAutoIdempotencyKey()},
 			wantSet: true,
 		},
@@ -259,7 +260,7 @@ func TestHTTPRecorder_AutoIdempotencyKey(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			var got Event
+			var got event.Event
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, _ := io.ReadAll(r.Body)
 				_ = json.Unmarshal(body, &got)
@@ -270,7 +271,7 @@ func TestHTTPRecorder_AutoIdempotencyKey(t *testing.T) {
 			opts := append([]HTTPOption{WithBaseURL(srv.URL)}, tc.opt...)
 			rec := NewHTTPRecorder(testProjectID, "k", opts...)
 
-			e := NewEvent("user.login")
+			e := event.New("user.login")
 			if tc.preset != "" {
 				e.IdempotencyKey = tc.preset
 			}
@@ -294,7 +295,7 @@ func TestHTTPRecorder_AutoIdempotencyKey_Batch(t *testing.T) {
 	t.Parallel()
 
 	var got struct {
-		Events []Event `json:"events"`
+		Events []event.Event `json:"events"`
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -305,7 +306,7 @@ func TestHTTPRecorder_AutoIdempotencyKey_Batch(t *testing.T) {
 
 	rec := NewHTTPRecorder(testProjectID, "k", WithBaseURL(srv.URL), WithAutoIdempotencyKey())
 
-	events := []Event{
+	events := []event.Event{
 		{Action: "a.one"}, // empty key → auto-fill
 		{Action: "a.two", IdempotencyKey: "explicit-key-2"}, // preset → keep
 	}

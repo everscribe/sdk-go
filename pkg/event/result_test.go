@@ -1,4 +1,4 @@
-package audit
+package event
 
 import (
 	"encoding/json"
@@ -29,7 +29,7 @@ func TestResult_MarshalJSON(t *testing.T) {
 		{
 			name: "wrapped error message marshals as full .Error() chain",
 			in:   Result{Status: "error", Message: wrapErr()},
-			want: `{"status":"error","message":"audit: wrapped: original"}`,
+			want: `{"status":"error","message":"recorder: wrapped: original"}`,
 		},
 		{
 			name: "nil message omitted",
@@ -60,7 +60,7 @@ func TestResult_MarshalJSON(t *testing.T) {
 func TestResult_MarshalJSON_RoundTripsThroughEvent(t *testing.T) {
 	t.Parallel()
 
-	e := NewEvent("user.login")
+	e := New("user.login")
 	e.Result = Result{Status: "error", Code: 500, Message: errors.New("db down")}
 
 	body, err := json.Marshal(e)
@@ -77,5 +77,5 @@ func TestResult_MarshalJSON_RoundTripsThroughEvent(t *testing.T) {
 }
 
 func wrapErr() error {
-	return errors.New("audit: wrapped: original")
+	return errors.New("recorder: wrapped: original")
 }
