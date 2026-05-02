@@ -1,8 +1,14 @@
-# recorder-go
+# sdk-go
 
-Go client for the Everscribe audit-log ingestion API. Records who did
-what, when, on what resource, and — for mutation events — how the
-resource changed.
+Go SDK for the Everscribe audit-log API. Two coordinated surfaces:
+
+- **Recorder** — append-only event ingest. Records who did what, when,
+  on what resource, and — for mutation events — how the resource
+  changed.
+- **Auditor** — mints short-lived embed tokens that let a customer's
+  frontend mount the Everscribe embeddable component
+  (e.g. `<EverscribeEvents />`) to display events without exposing
+  the project API key to the browser.
 
 Single runtime dependency (`github.com/google/uuid`). Requires Go 1.25+.
 
@@ -16,50 +22,81 @@ Single runtime dependency (`github.com/google/uuid`). Requires Go 1.25+.
 - [The `Event` shape](#the-event-shape)
 - [`BufferedRecorder`](#bufferedrecorder)
 - [Idempotency](#idempotency)
+- [Embedded views](#embedded-views)
 
 ---
 
 ## Install
 
 ```sh
-go get github.com/everscribe/recorder-go
+go get github.com/everscribe/sdk-go
 ```
 
 ```go
 import (
-    "github.com/everscribe/recorder-go"            // Recorder, BufferedRecorder, HTTPRecorder, New
-    "github.com/everscribe/recorder-go/pkg/event"  // Event, Actor, Target, Result, NewMiddleware
+    "github.com/everscribe/sdk-go"                  // Client, New, NewRecorder, NewAuditor
+    "github.com/everscribe/sdk-go/pkg/recorder"     // BufferedRecorder, HTTPRecorder, options
+    "github.com/everscribe/sdk-go/pkg/auditor"      // Auditor client, TokenOptions
+    "github.com/everscribe/sdk-go/pkg/event"        // Event, Actor, Target, Result, NewMiddleware
 )
 ```
 
-The root package owns the recorder implementations; `pkg/event` owns
-the event/result domain types and the HTTP middleware.
+The root `everscribe` package is the entry point — bind credentials
+once and hand out per-surface clients. Customers who only need one
+surface can call `recorder.New` or `auditor.New` directly to skip the
+SDK-client step.
 
 ---
 
 ## Quickstart
 
-### 1. Initialize a Recorder
+### 1. Bind credentials and construct subclients
+
+The root `everscribe` package binds the project ID and API key once
+and lets you build per-surface clients without re-passing them:
 
 ```go
-rec := recorder.New(projectID, apiKey)
+es, err := everscribe.New(projectID, apiKey)
+if err != nil {
+    log.Fatal(err) // empty/whitespace credentials surface here, not at the first network call
+}
+rec := es.NewRecorder()
 defer rec.Close()
 ```
 
-`Close` drains pending events on shutdown.
-
-`New` returns a recorder with sane defaults. 
-
-Override any of
-them by passing options:
+For 12-factor / containerized deployments, read credentials from the
+environment instead — `NewFromEnv` reads `EVERSCRIBE_PROJECT_ID` and
+`EVERSCRIBE_API_KEY` and returns an error naming the missing variable
+if either is unset or empty:
 
 ```go
-rec := recorder.New(projectID, apiKey,
+es, err := everscribe.NewFromEnv()
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+Override defaults by passing options to the subclient constructor:
+
+```go
+rec := es.NewRecorder(
     recorder.WithBufferSize(2000),
     recorder.WithFlushInterval(2*time.Second),
     recorder.WithOverflowPolicy(recorder.PolicyBlock),
 )
 ```
+
+Customers who only need the recorder can skip the SDK client:
+
+```go
+rec := recorder.New(projectID, apiKey,
+    recorder.WithBufferSize(2000),
+)
+```
+
+Both shapes are supported. The SDK client is the recommended path
+once you wire up more than one surface (recorder + auditor); the
+direct constructor is a one-line shortcut for ingest-only setups.
 
 | Option                     | Description                                                                                | Default            |
 |----------------------------|--------------------------------------------------------------------------------------------|--------------------|
@@ -488,3 +525,89 @@ rec := recorder.New(projectID, apiKey, recorder.WithAutoIdempotencyKey())
 
 Off by default. Caller-supplied keys always win — auto-population
 only fills empty keys.
+
+---
+
+## Embedded views
+
+The `pkg/auditor` subpackage mints short-lived JWT tokens that let a
+customer's frontend mount the Everscribe embeddable component (e.g.
+`<EverscribeEvents />`) without exposing the project API key to the
+browser.
+
+The flow has three actors:
+
+1. **Customer's backend** (this SDK) holds the project API key and
+   mints embed tokens via `auditor.Client.MintToken`.
+2. **Customer's frontend** receives the token from a route the
+   customer's backend exposes, and passes it as a prop to the React
+   component. Never sees the API key.
+3. **Everscribe API** verifies the token on each read and scopes
+   results to the token's claims (tenant, columns, actions).
+
+### Minting a token
+
+The cleanest path is via the SDK client, which already holds the
+credentials:
+
+```go
+import (
+    "github.com/everscribe/sdk-go"
+    "github.com/everscribe/sdk-go/pkg/auditor"
+)
+
+es := everscribe.New(projectID, apiKey)
+rec := es.NewRecorder()
+defer rec.Close()
+
+aud := es.NewAuditor()
+
+token, err := aud.MintToken(ctx, auditor.TokenOptions{
+    TenantID:       "acme-corp",
+    ExpiresIn:      time.Hour,
+    AllowedColumns: []string{"occurred_at", "action", "actor"},
+    AllowedActions: []string{"user.*", "billing.invoice.created"},
+})
+// token is a JWT string; hand to the customer's frontend via their own route.
+```
+
+Customers who only need the auditor surface can construct it directly:
+
+```go
+aud := auditor.New(projectID, apiKey)
+token, err := aud.MintToken(ctx, auditor.TokenOptions{...})
+```
+
+Recorder and auditor are independent surfaces that share auth — a
+customer who only mints view tokens (e.g. a separate read-side
+service) doesn't need to construct a recorder. Future auditor-side
+surfaces (`aud.RotateSecret()`, listing active tokens once revocation
+lands) will land naturally on `*auditor.Client`.
+
+### `TokenOptions`
+
+| Field            | Type            | Behavior |
+|------------------|-----------------|----------|
+| `TenantID`       | `string`        | Optional. Scopes reads to events with the matching `tenant_id`. Trimmed by the SDK; rejected if empty after trim or > 256 chars. |
+| `ExpiresIn`      | `time.Duration` | Token lifetime. Server clamps to `[60s, 24h]`. Zero uses the server default (1h). |
+| `AllowedColumns` | `[]string`      | Optional whitelist of `Event` JSON field names. `nil` means no restriction; an empty non-nil slice is rejected (avoids silently widening scope when callers build the list from filtered user input). The SDK validates against `event.Event`'s struct tags via reflection at startup. |
+| `AllowedActions` | `[]string`      | Optional filter of allowed actions. Each entry is exact (`user.login`) or a suffix wildcard (`user.*`). `nil` means no restriction; empty non-nil slice rejected. Bare `*`, prefix wildcards (`*.create`), mid-string wildcards (`user.*.create`), and wildcards without a preceding dot (`user*`) are rejected. |
+
+### Errors
+
+`MintToken` returns one of:
+
+- A wrapped validation error from the SDK (caller-supplied options
+  fail client-side checks; no HTTP call is made).
+- `*auditor.Error` for non-2xx responses from the mint endpoint —
+  inspect via `errors.As`. Status codes match the spec: 400 for
+  invalid options, 401 for bad auth, 404 for missing/soft-deleted
+  project.
+- A wrapped transport error (timeout, connection refused, etc.).
+
+### Configuration
+
+`auditor.New` accepts options analogous to the recorder:
+
+- `auditor.WithBaseURL(url)` — override the API host (tests, staging).
+- `auditor.WithHTTPClient(c)` — supply a custom `*http.Client`.
