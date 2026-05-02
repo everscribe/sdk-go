@@ -1,4 +1,4 @@
-module github.com/everscribe/recorder-go
+module github.com/everscribe/sdk-go
 
 go 1.25.0
 
