@@ -9,7 +9,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/everscribe/recorder-go/pkg/event"
+	"github.com/everscribe/sdk-go/pkg/event"
 	"github.com/stretchr/testify/require"
 )
 

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/everscribe/recorder-go/pkg/event"
+	"github.com/everscribe/sdk-go/pkg/event"
 )
 
 // defaultBaseURL is the production ingestion endpoint. Tests and staging

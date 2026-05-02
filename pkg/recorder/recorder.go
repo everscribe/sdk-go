@@ -3,7 +3,7 @@ package recorder
 import (
 	"context"
 
-	"github.com/everscribe/recorder-go/pkg/event"
+	"github.com/everscribe/sdk-go/pkg/event"
 )
 
 // Recorder records audit events. Implementations may be synchronous

@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/everscribe/recorder-go/pkg/event"
+	"github.com/everscribe/sdk-go/pkg/event"
 )
 
 // Errors returned by Recorder implementations.
