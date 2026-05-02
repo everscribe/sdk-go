@@ -109,7 +109,7 @@
 // opinion about what a "session" is, so each server wires up a resolver
 // matching its own auth model:
 //
-//	auditMW := event.NewMiddleware(func(ctx context.Context) event.Actor {
+//	eventMw := event.NewMiddleware(func(ctx context.Context) event.Actor {
 //	    s, ok := session.FromContext(ctx)
 //	    if !ok {
 //	        return event.Actor{Type: "anonymous"}
