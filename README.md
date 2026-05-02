@@ -148,20 +148,20 @@ the producer (`sessionMW` above) has to run before the consumer (the
 audit middleware, which calls your `actorResolver`):
 
 ```go
-auditMw := event.NewMiddleware(actorResolver)
+eventMw := event.NewMiddleware(actorResolver)
 
 // ✅ Session attaches identity first, then audit reads it.
-handler := sessionMW(auditMw(mux))
+handler := sessionMW(eventMw(mux))
 
 // ❌ Audit runs before session — actorResolver sees no session so
 //    every event is provisioned with an anonymous Actor.
-handler := auditMw(sessionMW(mux))
+handler := eventMw(sessionMW(mux))
 ```
 
 ### 4. Record events in handlers
 
 ```go
-http.Handle("POST /api-keys", auditMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+http.Handle("POST /api-keys", eventMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
     ctx := r.Context()
     e := event.FromContext(ctx)
     defer rec.Record(ctx, e)
@@ -183,7 +183,7 @@ http.Handle("POST /api-keys", auditMw(http.HandlerFunc(func(w http.ResponseWrite
 
 For mutation events, attach the before/after state with `Diff`.
 ```go
-http.Handle("PATCH /users/{id}", auditMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+http.Handle("PATCH /users/{id}", eventMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
     ctx := r.Context()
     e := event.FromContext(ctx)
     defer rec.Record(ctx, e)
@@ -235,7 +235,7 @@ per event so each gets a fresh clone of the per-request template
 (Actor, Origin) without sharing or mutating metadata:
 
 ```go
-http.Handle("POST /users/{id}/sessions/revoke-all", auditMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+http.Handle("POST /users/{id}/sessions/revoke-all", eventMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
     ctx := r.Context()
     userID := r.PathValue("id")
 
@@ -270,7 +270,7 @@ ingestion API on each flush — no need to assemble batches yourself.
 **Empty `Action` is a no-op**
 
 ```go
-http.Handle("POST /users/{id}/lock", auditMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+http.Handle("POST /users/{id}/lock", eventMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
     ctx := r.Context()
     e := event.FromContext(ctx)
     defer rec.Record(ctx, e)
@@ -306,7 +306,7 @@ security-relevant, but at handler entry the resolver returns
 succeeds:
 
 ```go
-http.Handle("POST /login", auditMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+http.Handle("POST /login", eventMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
     ctx := r.Context()
     e := event.FromContext(ctx)
     defer rec.Record(ctx, e)
@@ -345,7 +345,7 @@ monitoring still needs to know which actually happened — repeated
 "no match" entries are how you spot credential-stuffing campaigns:
 
 ```go
-http.Handle("POST /password/reset", auditMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+http.Handle("POST /password/reset", eventMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
     ctx := r.Context()
     e := event.FromContext(ctx)
     defer rec.Record(ctx, e)
