@@ -5,7 +5,7 @@ Go SDK for the Everscribe audit-log API. Two coordinated surfaces:
 - **Recorder** — append-only event ingest. Records who did what, when,
   on what resource, and — for mutation events — how the resource
   changed.
-- **Auditor** — mints short-lived embed tokens that let a customer's
+- **Minter** — mints short-lived embed tokens that let a customer's
   frontend mount the Everscribe embeddable component
   (e.g. `<EverscribeEvents />`) to display events without exposing
   the project API key to the browser.
@@ -34,16 +34,16 @@ go get github.com/everscribe/sdk-go
 
 ```go
 import (
-    "github.com/everscribe/sdk-go"                  // Client, New, NewRecorder, NewAuditor
+    "github.com/everscribe/sdk-go"                  // Client, New, NewRecorder, NewMinter
     "github.com/everscribe/sdk-go/pkg/recorder"     // BufferedRecorder, HTTPRecorder, options
-    "github.com/everscribe/sdk-go/pkg/auditor"      // Auditor client, TokenOptions
+    "github.com/everscribe/sdk-go/pkg/minter"       // Minter client, TokenOptions
     "github.com/everscribe/sdk-go/pkg/event"        // Event, Actor, Target, Result, NewMiddleware
 )
 ```
 
 The root `everscribe` package is the entry point — bind credentials
 once and hand out per-surface clients. Customers who only need one
-surface can call `recorder.New` or `auditor.New` directly to skip the
+surface can call `recorder.New` or `minter.New` directly to skip the
 SDK-client step.
 
 ---
@@ -95,7 +95,7 @@ rec := recorder.New(projectID, apiKey,
 ```
 
 Both shapes are supported. The SDK client is the recommended path
-once you wire up more than one surface (recorder + auditor); the
+once you wire up more than one surface (recorder + minter); the
 direct constructor is a one-line shortcut for ingest-only setups.
 
 | Option                     | Description                                                                                | Default            |
@@ -530,7 +530,7 @@ only fills empty keys.
 
 ## Embedded views
 
-The `pkg/auditor` subpackage mints short-lived JWT tokens that let a
+The `pkg/minter` subpackage mints short-lived JWT tokens that let a
 customer's frontend mount the Everscribe embeddable component (e.g.
 `<EverscribeEvents />`) without exposing the project API key to the
 browser.
@@ -538,7 +538,7 @@ browser.
 The flow has three actors:
 
 1. **Customer's backend** (this SDK) holds the project API key and
-   mints embed tokens via `auditor.Client.MintToken`.
+   mints embed tokens via `minter.Client.MintToken`.
 2. **Customer's frontend** receives the token from a route the
    customer's backend exposes, and passes it as a prop to the React
    component. Never sees the API key.
@@ -553,16 +553,16 @@ credentials:
 ```go
 import (
     "github.com/everscribe/sdk-go"
-    "github.com/everscribe/sdk-go/pkg/auditor"
+    "github.com/everscribe/sdk-go/pkg/minter"
 )
 
 es := everscribe.New(projectID, apiKey)
 rec := es.NewRecorder()
 defer rec.Close()
 
-aud := es.NewAuditor()
+m := es.NewMinter()
 
-token, err := aud.MintToken(ctx, auditor.TokenOptions{
+token, err := m.MintToken(ctx, minter.TokenOptions{
     TenantID:       "acme-corp",
     ExpiresIn:      time.Hour,
     AllowedColumns: []string{"occurred_at", "action", "actor"},
@@ -571,18 +571,18 @@ token, err := aud.MintToken(ctx, auditor.TokenOptions{
 // token is a JWT string; hand to the customer's frontend via their own route.
 ```
 
-Customers who only need the auditor surface can construct it directly:
+Customers who only need the minter surface can construct it directly:
 
 ```go
-aud := auditor.New(projectID, apiKey)
-token, err := aud.MintToken(ctx, auditor.TokenOptions{...})
+m := minter.New(projectID, apiKey)
+token, err := m.MintToken(ctx, minter.TokenOptions{...})
 ```
 
-Recorder and auditor are independent surfaces that share auth — a
+Recorder and minter are independent surfaces that share auth — a
 customer who only mints view tokens (e.g. a separate read-side
-service) doesn't need to construct a recorder. Future auditor-side
-surfaces (`aud.RotateSecret()`, listing active tokens once revocation
-lands) will land naturally on `*auditor.Client`.
+service) doesn't need to construct a recorder. Future minter-side
+surfaces (`m.RotateSecret()`, listing active tokens once revocation
+lands) will land naturally on `*minter.Client`.
 
 ### `TokenOptions`
 
@@ -599,7 +599,7 @@ lands) will land naturally on `*auditor.Client`.
 
 - A wrapped validation error from the SDK (caller-supplied options
   fail client-side checks; no HTTP call is made).
-- `*auditor.Error` for non-2xx responses from the mint endpoint —
+- `*minter.Error` for non-2xx responses from the mint endpoint —
   inspect via `errors.As`. Status codes match the spec: 400 for
   invalid options, 401 for bad auth, 404 for missing/soft-deleted
   project.
@@ -607,7 +607,7 @@ lands) will land naturally on `*auditor.Client`.
 
 ### Configuration
 
-`auditor.New` accepts options analogous to the recorder:
+`minter.New` accepts options analogous to the recorder:
 
-- `auditor.WithBaseURL(url)` — override the API host (tests, staging).
-- `auditor.WithHTTPClient(c)` — supply a custom `*http.Client`.
+- `minter.WithBaseURL(url)` — override the API host (tests, staging).
+- `minter.WithHTTPClient(c)` — supply a custom `*http.Client`.
