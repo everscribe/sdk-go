@@ -1,4 +1,4 @@
-// Package auditor mints embed tokens used by the Everscribe embeddable
+// Package minter mints embed tokens used by the Everscribe embeddable
 // component to display audit events from a customer's frontend without
 // exposing the project API key.
 //
@@ -8,7 +8,7 @@
 // read-only requests to /api/v1/embed/events.
 //
 // See the sdk-go README "Embedded views" section for the full flow.
-package auditor
+package minter
 
 import (
 	"bytes"
@@ -147,14 +147,14 @@ func (c *Client) MintToken(ctx context.Context, opts TokenOptions) (string, erro
 	path := "/v1/projects/" + c.projectID + "/embed-tokens"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("auditor: build request: %w", err)
+		return "", fmt.Errorf("minter: build request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("auditor: post: %w", err)
+		return "", fmt.Errorf("minter: post: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -163,7 +163,7 @@ func (c *Client) MintToken(ctx context.Context, opts TokenOptions) (string, erro
 			Token string `json:"token"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-			return "", fmt.Errorf("auditor: decode response: %w", err)
+			return "", fmt.Errorf("minter: decode response: %w", err)
 		}
 		return out.Token, nil
 	}
@@ -183,7 +183,7 @@ type Error struct {
 }
 
 func (e *Error) Error() string {
-	return fmt.Sprintf("auditor: http %d: %s", e.StatusCode, e.Body)
+	return fmt.Sprintf("minter: http %d: %s", e.StatusCode, e.Body)
 }
 
 // marshal validates opts and produces the request JSON body.
@@ -200,31 +200,31 @@ func (o TokenOptions) marshal() ([]byte, error) {
 	if o.TenantID != "" {
 		trimmed := strings.TrimSpace(o.TenantID)
 		if trimmed == "" {
-			return nil, errors.New("auditor: TenantID is empty after trim")
+			return nil, errors.New("minter: TenantID is empty after trim")
 		}
 		if len(trimmed) > 256 {
-			return nil, errors.New("auditor: TenantID exceeds 256 chars")
+			return nil, errors.New("minter: TenantID exceeds 256 chars")
 		}
 		w.TenantID = trimmed
 	}
 
 	if o.ExpiresIn != 0 {
 		if o.ExpiresIn < MinExpiresIn {
-			return nil, fmt.Errorf("auditor: ExpiresIn %s below minimum %s", o.ExpiresIn, MinExpiresIn)
+			return nil, fmt.Errorf("minter: ExpiresIn %s below minimum %s", o.ExpiresIn, MinExpiresIn)
 		}
 		if o.ExpiresIn > MaxExpiresIn {
-			return nil, fmt.Errorf("auditor: ExpiresIn %s above maximum %s", o.ExpiresIn, MaxExpiresIn)
+			return nil, fmt.Errorf("minter: ExpiresIn %s above maximum %s", o.ExpiresIn, MaxExpiresIn)
 		}
 		w.ExpiresIn = int(o.ExpiresIn / time.Second)
 	}
 
 	if o.AllowedColumns != nil {
 		if len(o.AllowedColumns) == 0 {
-			return nil, errors.New("auditor: AllowedColumns is empty; pass nil for no restriction")
+			return nil, errors.New("minter: AllowedColumns is empty; pass nil for no restriction")
 		}
 		for _, col := range o.AllowedColumns {
 			if _, ok := allowedColumns[col]; !ok {
-				return nil, fmt.Errorf("auditor: unknown column name %q", col)
+				return nil, fmt.Errorf("minter: unknown column name %q", col)
 			}
 		}
 		w.Columns = o.AllowedColumns
@@ -232,11 +232,11 @@ func (o TokenOptions) marshal() ([]byte, error) {
 
 	if o.AllowedActions != nil {
 		if len(o.AllowedActions) == 0 {
-			return nil, errors.New("auditor: AllowedActions is empty; pass nil for no restriction")
+			return nil, errors.New("minter: AllowedActions is empty; pass nil for no restriction")
 		}
 		for _, a := range o.AllowedActions {
 			if !actionGrammar.MatchString(a) {
-				return nil, fmt.Errorf("auditor: action entry %q does not match grammar [a-zA-Z0-9_]+(\\.[a-zA-Z0-9_]+)*(\\.\\*)?", a)
+				return nil, fmt.Errorf("minter: action entry %q does not match grammar [a-zA-Z0-9_]+(\\.[a-zA-Z0-9_]+)*(\\.\\*)?", a)
 			}
 		}
 		w.Actions = o.AllowedActions

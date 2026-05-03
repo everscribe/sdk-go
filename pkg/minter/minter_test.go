@@ -1,4 +1,4 @@
-package auditor
+package minter
 
 import (
 	"context"
