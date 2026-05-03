@@ -48,12 +48,12 @@ func TestNewRecorder_ConstructsBufferedRecorder(t *testing.T) {
 	defer rec.Close()
 }
 
-func TestNewAuditor_ConstructsAuditorClient(t *testing.T) {
+func TestNewMinter_ConstructsMinterClient(t *testing.T) {
 	t.Parallel()
 	c, err := New("proj_123", "evs_secret")
 	require.NoError(t, err)
-	aud := c.NewAuditor()
-	require.NotNil(t, aud)
+	m := c.NewMinter()
+	require.NotNil(t, m)
 }
 
 func TestNewFromEnv_Success(t *testing.T) {

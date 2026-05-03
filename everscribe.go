@@ -1,6 +1,6 @@
 // Package everscribe is the top-level entry point for the Everscribe
 // Go SDK. It binds a project's credentials once and hands out
-// per-surface clients (recorder for ingest, auditor for read-side
+// per-surface clients (recorder for ingest, minter for read-side
 // embed-token minting) that share the same auth.
 //
 // Typical usage:
@@ -14,8 +14,8 @@
 //	rec := es.NewRecorder()
 //	defer rec.Close()
 //
-//	aud := es.NewAuditor()
-//	token, err := aud.MintToken(ctx, auditor.TokenOptions{...})
+//	m := es.NewMinter()
+//	token, err := m.MintToken(ctx, minter.TokenOptions{...})
 //
 // For 12-factor / containerized deployments, NewFromEnv reads
 // EVERSCRIBE_PROJECT_ID and EVERSCRIBE_API_KEY from the process
@@ -23,7 +23,7 @@
 //
 // Customers who only need one surface can call its constructor
 // directly — recorder.New(projectID, apiKey) and
-// auditor.New(projectID, apiKey) both still work and skip the
+// minter.New(projectID, apiKey) both still work and skip the
 // SDK-client step.
 package everscribe
 
@@ -33,7 +33,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/everscribe/sdk-go/pkg/auditor"
+	"github.com/everscribe/sdk-go/pkg/minter"
 	"github.com/everscribe/sdk-go/pkg/recorder"
 )
 
@@ -45,7 +45,7 @@ const (
 
 // Client is a credential-bearing handle to an Everscribe project.
 // It does not hold network state itself; subclient constructors
-// (NewRecorder, NewAuditor) build per-surface clients that own their
+// (NewRecorder, NewMinter) build per-surface clients that own their
 // own connections.
 //
 // Reuse a single Client for the lifetime of the process; safe for
@@ -99,9 +99,9 @@ func (c *Client) NewRecorder(opts ...recorder.RecorderOption) *recorder.Buffered
 	return recorder.New(c.projectID, c.apiKey, opts...)
 }
 
-// NewAuditor returns an auditor client for the bound project.
-// Forwarded options apply to the auditor; see the auditor package
+// NewMinter returns a minter client for the bound project.
+// Forwarded options apply to the minter; see the minter package
 // for the full list (WithBaseURL, WithHTTPClient).
-func (c *Client) NewAuditor(opts ...auditor.Option) *auditor.Client {
-	return auditor.New(c.projectID, c.apiKey, opts...)
+func (c *Client) NewMinter(opts ...minter.Option) *minter.Client {
+	return minter.New(c.projectID, c.apiKey, opts...)
 }
