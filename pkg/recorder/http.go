@@ -15,7 +15,7 @@ import (
 
 // defaultBaseURL is the production ingestion endpoint. Tests and staging
 // environments override via WithBaseURL.
-const defaultBaseURL = "https://everscribe.io/api"
+const defaultBaseURL = "https://api.everscribe.io"
 
 // HTTPRecorder posts events to the audit-log ingestion API. Implements
 // both Recorder and BatchRecorder — wrapping it in a BufferedRecorder

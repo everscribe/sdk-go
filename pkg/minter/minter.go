@@ -5,7 +5,7 @@
 // An embed token is a short-lived, signed JWT minted by the customer's
 // backend (using the project API key) and forwarded to the frontend.
 // The frontend passes it to the React component, which authenticates
-// read-only requests to /api/v1/embed/events.
+// read-only requests to /v1/embed/events.
 //
 // See the sdk-go README "Embedded views" section for the full flow.
 package minter
@@ -26,7 +26,7 @@ import (
 	"github.com/everscribe/sdk-go/pkg/event"
 )
 
-const defaultBaseURL = "https://everscribe.io/api"
+const defaultBaseURL = "https://api.everscribe.io"
 
 // Lifetime bounds enforced by the server. ExpiresIn outside this range
 // is rejected at mint with 400.
