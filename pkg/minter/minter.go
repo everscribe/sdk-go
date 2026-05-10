@@ -132,6 +132,22 @@ type TokenOptions struct {
 	// (`user.*`). Nil means no restriction; empty non-nil slice is
 	// rejected (same reasoning as AllowedColumns).
 	AllowedActions []string
+
+	// AllowedFields restricts which catalog fields the token's
+	// DSL queries (and NLP-generated DSL) can reference. Same nil /
+	// non-nil-empty semantics as AllowedColumns / AllowedActions.
+	// When unset, every catalog field is available.
+	AllowedFields []string
+
+	// AllowDSLInput unlocks the Query (advanced DSL) tab in the
+	// embed components and accepts `?q=` on the read API. Default
+	// false — partner end-users can't type DSL.
+	AllowDSLInput bool
+
+	// AllowNLP unlocks the AI ("Ask in plain English") tab in the
+	// embed components and POST /v1/embed/events/nlp. Default
+	// false.
+	AllowNLP bool
 }
 
 // MintToken requests a new embed token from the API and returns the
@@ -189,10 +205,13 @@ func (e *Error) Error() string {
 // marshal validates opts and produces the request JSON body.
 func (o TokenOptions) marshal() ([]byte, error) {
 	type wire struct {
-		TenantID  string   `json:"tenant_id,omitempty"`
-		ExpiresIn int      `json:"expires_in,omitempty"`
-		Columns   []string `json:"columns,omitempty"`
-		Actions   []string `json:"actions,omitempty"`
+		TenantID      string   `json:"tenant_id,omitempty"`
+		ExpiresIn     int      `json:"expires_in,omitempty"`
+		Columns       []string `json:"columns,omitempty"`
+		Actions       []string `json:"actions,omitempty"`
+		AllowedFields []string `json:"allowed_fields,omitempty"`
+		AllowDSLInput bool     `json:"allow_dsl_input,omitempty"`
+		AllowNLP      bool     `json:"allow_nlp,omitempty"`
 	}
 
 	var w wire
@@ -241,6 +260,18 @@ func (o TokenOptions) marshal() ([]byte, error) {
 		}
 		w.Actions = o.AllowedActions
 	}
+
+	if o.AllowedFields != nil {
+		if len(o.AllowedFields) == 0 {
+			return nil, errors.New("minter: AllowedFields is empty; pass nil for no restriction")
+		}
+		// Field validation lives on the server (catalog is canonical
+		// there); the SDK ships entries through verbatim.
+		w.AllowedFields = o.AllowedFields
+	}
+
+	w.AllowDSLInput = o.AllowDSLInput
+	w.AllowNLP = o.AllowNLP
 
 	return json.Marshal(w)
 }
