@@ -78,7 +78,7 @@ func New(action string) *Event {
 // not mounted, or called outside the request path), returns a minimal
 // Event equivalent to NewEvent("").
 //
-// Each call returns an independent Event — mutating the returned value
+// Each call returns an independent Event - mutating the returned value
 // does not affect other events derived from the same context. Handlers
 // that record multiple events per request call FromContext once per event.
 func FromContext(ctx context.Context) *Event {

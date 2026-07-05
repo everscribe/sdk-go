@@ -223,7 +223,7 @@ func TestMintToken_AllEventColumnsAccepted(t *testing.T) {
 	_, err := c.MintToken(context.Background(), TokenOptions{AllowedColumns: expected})
 	require.NoError(t, err)
 
-	// Sanity check that the runtime-derived set matches the spec table.
+	// Sanity check that the runtime-derived set matches the expected columns.
 	require.Len(t, allowedColumns, len(expected))
 	for _, col := range expected {
 		_, ok := allowedColumns[col]
@@ -271,7 +271,7 @@ func TestMintToken_HTTPErrorReturnedAsError(t *testing.T) {
 func TestMintToken_ContextCancellation(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Block until the test's context cancels — never actually
+		// Block until the test's context cancels - never actually
 		// responds.
 		<-r.Context().Done()
 	}))

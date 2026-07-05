@@ -36,8 +36,8 @@ const (
 )
 
 // actionGrammar matches valid action filter entries: ASCII alphanumeric
-// and underscore, dot-separated segments, optional .* suffix. Mirrors
-// the server's grammar — see "Wildcard syntax for actions" in the spec.
+// and underscore, dot-separated segments, optional .* suffix. Matches
+// the action-filter grammar the server enforces.
 var actionGrammar = regexp.MustCompile(`^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*(\.\*)?$`)
 
 // allowedColumns is the set of valid Event field names, derived from
@@ -66,7 +66,7 @@ func buildAllowedColumns() map[string]struct{} {
 }
 
 // Client mints embed tokens for a single project. Construct one via New
-// and reuse for the lifetime of the process — Client is safe for
+// and reuse for the lifetime of the process - Client is safe for
 // concurrent use.
 type Client struct {
 	baseURL   string
@@ -122,7 +122,7 @@ type TokenOptions struct {
 
 	// AllowedColumns whitelists Event field names (JSON tags) the
 	// token's reads return. Nil means no restriction (all fields).
-	// An empty non-nil slice is rejected — the server requires
+	// An empty non-nil slice is rejected - the server requires
 	// explicit nil/omit for "all" to avoid silently widening scope
 	// when callers build the list from filtered user input.
 	AllowedColumns []string
@@ -141,7 +141,7 @@ type TokenOptions struct {
 
 	// AllowDSLInput unlocks the Query (advanced DSL) tab in the
 	// embed components and accepts `?q=` on the read API. Default
-	// false — partner end-users can't type DSL.
+	// false - partner end-users can't type DSL.
 	AllowDSLInput bool
 
 	// AllowNLP unlocks the AI ("Ask in plain English") tab in the

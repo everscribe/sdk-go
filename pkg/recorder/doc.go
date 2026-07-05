@@ -1,12 +1,12 @@
 // Package recorder provides an append-only event recording client for the
 // audit-log ingestion API. Events capture who did what, when, on what
-// resource, and — for mutation events — how the resource changed.
+// resource, and - for mutation events - how the resource changed.
 //
 // # Overview
 //
 // New is the recommended entry point. It returns a
 // *BufferedRecorder that wraps an HTTPRecorder using sensible defaults.
-// New accepts both HTTPOption and BufferedOption arguments —
+// New accepts both HTTPOption and BufferedOption arguments -
 // pass either type directly, no wrapping needed.
 //
 //	rec := recorder.New(projectID, apiKey,
@@ -16,8 +16,8 @@
 //	)
 //	defer rec.Close()
 //
-// For advanced cases — custom inner Recorder, synchronous writes, an
-// instrumented transport — use the building blocks directly:
+// For advanced cases - custom inner Recorder, synchronous writes, an
+// instrumented transport - use the building blocks directly:
 //
 //   - HTTPRecorder posts events to the audit-log ingestion API.
 //   - BufferedRecorder wraps any Recorder with asynchronous batching.
@@ -33,7 +33,7 @@
 // per event when you need that.
 //
 // For SDK-internal safety against double-sending the same *Event,
-// enable WithAutoIdempotencyKey() — it copies Event.ID into IdempotencyKey
+// enable WithAutoIdempotencyKey() - it copies Event.ID into IdempotencyKey
 // at send time when the key is empty. Caller-supplied keys win.
 //
 // # HTTP handlers: the defer pattern
@@ -61,7 +61,7 @@
 // The deferred Record call reads the final HTTP status from the
 // middleware-wrapped ResponseWriter (stashed on the request context by
 // event.NewMiddleware) and auto-populates Event.Result when it is unset.
-// Handlers override by setting e.Result explicitly — useful for
+// Handlers override by setting e.Result explicitly - useful for
 // POST-redirect-GET flows where HTTP status is the same on success and
 // failure.
 //
@@ -92,7 +92,7 @@
 //
 // # Non-HTTP callers
 //
-// Background jobs, cron, and CLIs use NewEvent directly — no special
+// Background jobs, cron, and CLIs use NewEvent directly - no special
 // argument changes are needed since Record only takes a context:
 //
 //	e := event.New("subscription.trial_expired")
@@ -105,7 +105,7 @@
 // HTTP servers mount event.NewMiddleware to pre-populate request contexts
 // with an Event template and stash the wrapped ResponseWriter for
 // status auto-capture. The middleware takes an ActorResolver that
-// derives the Actor from session state — the recorder package has no
+// derives the Actor from session state - the recorder package has no
 // opinion about what a "session" is, so each server wires up a resolver
 // matching its own auth model:
 //

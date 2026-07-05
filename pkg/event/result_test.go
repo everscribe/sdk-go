@@ -70,7 +70,7 @@ func TestResult_MarshalJSON_RoundTripsThroughEvent(t *testing.T) {
 	require.NoError(t, json.Unmarshal(body, &got))
 
 	// On the wire, Message is a string. Decoding into any gives us the
-	// string back — callers reading it can type-assert to string.
+	// string back - callers reading it can type-assert to string.
 	msg, ok := got.Result.Message.(string)
 	require.True(t, ok)
 	require.Equal(t, "db down", msg)

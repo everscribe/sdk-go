@@ -1,11 +1,17 @@
-# sdk-go
+<p align="center">
+  <img src="assets/everscribe.svg" alt="Everscribe" height="64" align="middle">
+  &nbsp;&nbsp;<b>+</b>&nbsp;&nbsp;
+  <img src="assets/go.svg" alt="Go" height="56" align="middle">
+</p>
 
-Go SDK for the Everscribe audit-log API. Two coordinated surfaces:
+# everscribe/sdk-go
 
-- **Recorder** — append-only event ingest. Records who did what, when,
-  on what resource, and — for mutation events — how the resource
+Go SDK for the [Everscribe](https://everscribe.io)  audit-log API. Two coordinated surfaces:
+
+- **Recorder** - append-only event ingest. Records who did what, when,
+  on what resource, and - for mutation events - how the resource
   changed.
-- **Minter** — mints short-lived embed tokens that let a customer's
+- **Minter** - mints short-lived embed tokens that let a customer's
   frontend mount the Everscribe embeddable component
   (e.g. `<EverscribeEvents />`) to display events without exposing
   the project API key to the browser.
@@ -41,7 +47,7 @@ import (
 )
 ```
 
-The root `everscribe` package is the entry point — bind credentials
+The root `everscribe` package is the entry point - bind credentials
 once and hand out per-surface clients. Customers who only need one
 surface can call `recorder.New` or `minter.New` directly to skip the
 SDK-client step.
@@ -65,7 +71,7 @@ defer rec.Close()
 ```
 
 For 12-factor / containerized deployments, read credentials from the
-environment instead — `NewFromEnv` reads `EVERSCRIBE_PROJECT_ID` and
+environment instead - `NewFromEnv` reads `EVERSCRIBE_PROJECT_ID` and
 `EVERSCRIBE_API_KEY` and returns an error naming the missing variable
 if either is unset or empty:
 
@@ -124,7 +130,7 @@ The resolver bridges session-provisioned request context to an `event.Actor`.
 So lets say your middleware for provisioninig the request context looks like:
 
 ```go
-// Your project's session shape — whatever your auth produces.
+// Your project's session shape - whatever your auth produces.
 type Session struct {
     UserID, Username, Email string
     IsAdmin  bool
@@ -180,7 +186,7 @@ actorResolver := func(ctx context.Context) event.Actor {
 
 
 **Ordering matters.** The audit middleware must run **after** any
-middleware that provisions the request context with session data —
+middleware that provisions the request context with session data -
 the producer (`sessionMW` above) has to run before the consumer (the
 audit middleware, which calls your `actorResolver`):
 
@@ -190,7 +196,7 @@ eventMw := event.NewMiddleware(actorResolver)
 // ✅ Session attaches identity first, then audit reads it.
 handler := sessionMW(eventMw(mux))
 
-// ❌ Audit runs before session — actorResolver sees no session so
+// ❌ Audit runs before session - actorResolver sees no session so
 //    every event is provisioned with an anonymous Actor.
 handler := eventMw(sessionMW(mux))
 ```
@@ -263,7 +269,7 @@ you'll see in the diff output.
 
 #### Recording multiple events per request
 
-Some handlers fan out — one privileged operation can affect many
+Some handlers fan out - one privileged operation can affect many
 resources, and each one is independently audit-worthy. A common
 incident-response example is revoking every active session for a
 compromised account: investigators need to see *which* sessions were
@@ -300,7 +306,7 @@ http.Handle("POST /users/{id}/sessions/revoke-all", eventMw(http.HandlerFunc(fun
 
 The buffered recorder coalesces these (and events from other
 concurrent requests) into a single `RecordBatch` call to the
-ingestion API on each flush — no need to assemble batches yourself.
+ingestion API on each flush - no need to assemble batches yourself.
 
 ## Three key behaviors
 
@@ -334,7 +340,7 @@ http.Handle("POST /users/{id}/lock", eventMw(http.HandlerFunc(func(w http.Respon
 })))
 ```
 
-**Overriding the resolver's `Actor`** — when there's no session yet
+**Overriding the resolver's `Actor`** - when there's no session yet
 (login, signup) or when the actor isn't a session user (webhooks,
 system tasks), the handler overrides `e.Actor` directly. Login is the
 canonical case: failed and successful attempts are both
@@ -373,12 +379,12 @@ http.Handle("POST /login", eventMw(http.HandlerFunc(func(w http.ResponseWriter, 
 })))
 ```
 
-**Explicit `Result` wins over auto-capture** — when the HTTP status
+**Explicit `Result` wins over auto-capture** - when the HTTP status
 doesn't reflect the operation's audit outcome. Password reset is the
 canonical case: anti-enumeration security requires the API to redirect
 to the same "check your email" page whether the email matched a real
 account or not, so the user-facing response is identical. Audit
-monitoring still needs to know which actually happened — repeated
+monitoring still needs to know which actually happened - repeated
 "no match" entries are how you spot credential-stuffing campaigns:
 
 ```go
@@ -433,13 +439,13 @@ type Event struct {
 
 `projectID` is set once at `New` and sent on every request.
 
-`TenantID` groups events one level above the actor — set it when you
+`TenantID` groups events one level above the actor - set it when you
 run a multi-tenant SaaS and want events queryable per workspace, org,
 or connected account (multi-tenant CRMs, Stripe Connect-style
 platforms, B2B tools). Single-tenant apps (B2C products, internal
 dashboards) leave it blank.
 
-`Result.Message` is `any` and special-cases `error` — pass an `error`
+`Result.Message` is `any` and special-cases `error` - pass an `error`
 directly and it marshals as the result of `err.Error()`:
 
 ```go
@@ -466,7 +472,7 @@ _ = rec.Record(ctx, e)
 
 ## BufferedRecorder
 
-`New` returns a `*BufferedRecorder` — events enqueue on an
+`New` returns a `*BufferedRecorder` - events enqueue on an
 internal channel and a background goroutine flushes batches to the
 HTTP recorder when the size threshold or flush interval is reached.
 Tuning knobs live in the [Quickstart options table](#1-initialize-a-recorder);
@@ -482,14 +488,14 @@ When the buffer is full at `Record` time:
 | `PolicyBlock`      | Block until space, ctx cancel, or `Close`.                   |
 | `PolicyError`      | Return `ErrBufferFull`.                                      |
 
-A full buffer means you're misconfigured — resize, speed up
+A full buffer means you're misconfigured - resize, speed up
 downstream, or scale out. Watch `Stats().Dropped`.
 
 ### `Flush` and `Stats`
 
 `Flush(ctx)` synchronously drains everything buffered at the time of
 the call. Useful for tests and graceful shutdown sync points. `Close`
-calls a final drain — you don't need to `Flush` before `Close`.
+calls a final drain - you don't need to `Flush` before `Close`.
 
 `Stats()` exposes counters for export to Prometheus/Datadog:
 
@@ -506,7 +512,7 @@ type BufferedStats struct {
 
 ## Idempotency
 
-`Event.IdempotencyKey` is for caller-supplied stable keys — webhook
+`Event.IdempotencyKey` is for caller-supplied stable keys - webhook
 event IDs, upstream request IDs, anything that identifies "the same
 logical event" across retries the SDK can't see:
 
@@ -523,7 +529,7 @@ enable `WithAutoIdempotencyKey`. It copies `Event.ID` into
 rec := recorder.New(projectID, apiKey, recorder.WithAutoIdempotencyKey())
 ```
 
-Off by default. Caller-supplied keys always win — auto-population
+Off by default. Caller-supplied keys always win - auto-population
 only fills empty keys.
 
 ---
@@ -578,7 +584,7 @@ m := minter.New(projectID, apiKey)
 token, err := m.MintToken(ctx, minter.TokenOptions{...})
 ```
 
-Recorder and minter are independent surfaces that share auth — a
+Recorder and minter are independent surfaces that share auth - a
 customer who only mints view tokens (e.g. a separate read-side
 service) doesn't need to construct a recorder. Future minter-side
 surfaces (`m.RotateSecret()`, listing active tokens once revocation
@@ -599,15 +605,14 @@ lands) will land naturally on `*minter.Client`.
 
 - A wrapped validation error from the SDK (caller-supplied options
   fail client-side checks; no HTTP call is made).
-- `*minter.Error` for non-2xx responses from the mint endpoint —
-  inspect via `errors.As`. Status codes match the spec: 400 for
-  invalid options, 401 for bad auth, 404 for missing/soft-deleted
-  project.
+- `*minter.Error` for non-2xx responses from the mint endpoint -
+  inspect via `errors.As`. Status codes: 400 for invalid options, 401
+  for bad auth, 404 for missing/soft-deleted project.
 - A wrapped transport error (timeout, connection refused, etc.).
 
 ### Configuration
 
 `minter.New` accepts options analogous to the recorder:
 
-- `minter.WithBaseURL(url)` — override the API host (tests, staging).
-- `minter.WithHTTPClient(c)` — supply a custom `*http.Client`.
+- `minter.WithBaseURL(url)` - override the API host (tests, staging).
+- `minter.WithHTTPClient(c)` - supply a custom `*http.Client`.

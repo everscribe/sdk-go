@@ -21,7 +21,7 @@ type wrappedWriterKey struct{}
 // handler has not set it explicitly.
 //
 // The returned middleware must run AFTER any auth middleware that
-// attaches session data to the request context — the ActorResolver
+// attaches session data to the request context - the ActorResolver
 // typically reads from session state. If resolve is nil, an anonymous
 // actor is installed.
 //
@@ -48,7 +48,7 @@ func NewMiddleware(resolve ActorResolver) func(http.Handler) http.Handler {
 
 // ActorResolver derives an Actor from request context. Typically reads
 // session data attached by an upstream auth middleware. The recorder package
-// does not know about any specific session type — each server wires up
+// does not know about any specific session type - each server wires up
 // a resolver that matches its own auth model.
 type ActorResolver func(ctx context.Context) Actor
 
@@ -92,7 +92,7 @@ func (rw *responseWriter) Status() int {
 
 // resultFromWrappedWriter returns a Result derived from a wrapped
 // ResponseWriter's captured status. Status 0 (no response written) maps
-// to an error result with a descriptive message — this typically
+// to an error result with a descriptive message - this typically
 // indicates a panic or early return before any response.
 func resultFromWrappedWriter(rw *responseWriter) Result {
 	status := rw.Status()

@@ -22,7 +22,7 @@
 // environment.
 //
 // Customers who only need one surface can call its constructor
-// directly — recorder.New(projectID, apiKey) and
+// directly - recorder.New(projectID, apiKey) and
 // minter.New(projectID, apiKey) both still work and skip the
 // SDK-client step.
 package everscribe

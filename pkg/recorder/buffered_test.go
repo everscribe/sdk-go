@@ -196,7 +196,7 @@ func TestBufferedRecorder_Flush_RespectsCtxCancel(t *testing.T) {
 	require.NoError(t, b.Record(context.Background(), event.New("a.one")))
 
 	// Force a flush so the inner is in flight, then issue a Flush whose
-	// ctx is already canceled — it should bail out without waiting.
+	// ctx is already canceled - it should bail out without waiting.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	err := b.Flush(ctx)
@@ -304,7 +304,7 @@ func TestBufferedRecorder_OverflowPolicyDropNewest_CountsDrops(t *testing.T) {
 		return blocker.calls == 1
 	}, time.Second, 5*time.Millisecond)
 
-	// Now fill the buffer again and try to push — these should drop.
+	// Now fill the buffer again and try to push - these should drop.
 	require.NoError(t, b.Record(context.Background(), event.New("a.two")))
 	for i := 0; i < 5; i++ {
 		require.NoError(t, b.Record(context.Background(), event.New("dropped")))
@@ -417,7 +417,7 @@ func TestBufferedRecorder_OverflowPolicyBlock_ReturnsNilOnClose(t *testing.T) {
 		WithFlushInterval(time.Hour),
 		WithOverflowPolicy(PolicyBlock),
 		WithSlogLogger(silentLogger()),
-		// Short drain timeout — the inner is held by the blocker, so the
+		// Short drain timeout - the inner is held by the blocker, so the
 		// run goroutine can't actually drain. We only care that the
 		// blocked Record returns nil when stop fires.
 		WithDrainTimeout(50*time.Millisecond),
@@ -458,7 +458,7 @@ func TestBufferedRecorder_DefaultOverflowPolicyIsDropNewest(t *testing.T) {
 	blocker := &blockingRec{release: make(chan struct{})}
 	defer close(blocker.release)
 
-	// No WithOverflowPolicy — should default to PolicyDropNewest.
+	// No WithOverflowPolicy - should default to PolicyDropNewest.
 	b := NewBufferedRecorder(blocker,
 		WithBufferSize(1),
 		WithFlushSize(1),

@@ -18,7 +18,7 @@ import (
 const defaultBaseURL = "https://api.everscribe.io"
 
 // HTTPRecorder posts events to the audit-log ingestion API. Implements
-// both Recorder and BatchRecorder — wrapping it in a BufferedRecorder
+// both Recorder and BatchRecorder - wrapping it in a BufferedRecorder
 // provides asynchronous batched delivery with configurable overflow
 // policies.
 //
@@ -33,10 +33,10 @@ const defaultBaseURL = "https://api.everscribe.io"
 //
 // Responses:
 //
-//	2xx — accepted
-//	4xx — permanent failure (bad request, unauthorized, payload too large)
-//	5xx — transient failure; callers can retry
-//	429 — rate limited; callers should back off
+//	2xx - accepted
+//	4xx - permanent failure (bad request, unauthorized, payload too large)
+//	5xx - transient failure; callers can retry
+//	429 - rate limited; callers should back off
 //
 // Non-2xx responses are returned as *HTTPError. Use HTTPError.Transient
 // to distinguish retryable failures.
@@ -52,7 +52,7 @@ type HTTPRecorder struct {
 // RecorderOption, so it can be passed directly to New.
 type HTTPOption func(*HTTPRecorder)
 
-// applyRecorder lets HTTPOption satisfy RecorderOption — see recorder.go.
+// applyRecorder lets HTTPOption satisfy RecorderOption - see recorder.go.
 func (o HTTPOption) applyRecorder(c *recorderConfig) {
 	c.httpOpts = append(c.httpOpts, o)
 }
@@ -75,7 +75,7 @@ func WithBaseURL(url string) HTTPOption {
 // without callers having to think about it.
 //
 // Callers who set IdempotencyKey explicitly (e.g., to a webhook event
-// ID for cross-retry idempotency) win — auto-population only fills
+// ID for cross-retry idempotency) win - auto-population only fills
 // empty keys. Off by default.
 func WithAutoIdempotencyKey() HTTPOption {
 	return func(l *HTTPRecorder) { l.autoIdempotencyKey = true }

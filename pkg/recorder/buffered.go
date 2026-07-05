@@ -26,7 +26,7 @@ type OverflowPolicy int
 const (
 	// PolicyDropNewest silently discards the incoming event and increments
 	// the dropped counter. Emits a slog warning on the first drop and
-	// every 1000th subsequent drop. Default policy — keeps the request
+	// every 1000th subsequent drop. Default policy - keeps the request
 	// path fast at the cost of losing events under sustained pressure.
 	// Operators should monitor the dropped counter and resize the buffer
 	// (or downstream throughput) when it grows.
@@ -46,7 +46,7 @@ const (
 // satisfies RecorderOption, so it can be passed directly to New.
 type BufferedOption func(*bufferedConfig)
 
-// applyRecorder lets BufferedOption satisfy RecorderOption — see recorder.go.
+// applyRecorder lets BufferedOption satisfy RecorderOption - see recorder.go.
 func (o BufferedOption) applyRecorder(c *recorderConfig) {
 	c.bufferedOpts = append(c.bufferedOpts, o)
 }
@@ -171,7 +171,7 @@ func (b *BufferedRecorder) Record(ctx context.Context, e *event.Event) error {
 	if e == nil || e.Action == "" {
 		return nil
 	}
-	// Post-Close guard — drop silently rather than block or panic.
+	// Post-Close guard - drop silently rather than block or panic.
 	select {
 	case <-b.stop:
 		return nil
@@ -359,7 +359,7 @@ func (b *BufferedRecorder) flushBatch(batch []event.Event) error {
 		for i := range batch {
 			if ierr := b.inner.Record(ctx, &batch[i]); ierr != nil {
 				err = ierr
-				// continue the loop — one failure should not abort the batch
+				// continue the loop - one failure should not abort the batch
 			}
 		}
 	}
