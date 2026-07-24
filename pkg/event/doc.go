@@ -91,7 +91,7 @@
 // # Adapters do not all behave identically
 //
 // Two divergences are worth knowing before you assume behavior carries across
-// frameworks. Both are documented in full in docs/adapters.md.
+// frameworks. Each is also documented on the adapter it applies to.
 //
 // A handler that returns without writing a response is recorded as an error by
 // the stdlib, gin, and echo adapters, which can all detect it, and as a
