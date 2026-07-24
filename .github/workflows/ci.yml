@@ -11,6 +11,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      # The committed go.work spans all six modules, so without this the
+      # matrix's per-module build/vet/test never actually exercises module
+      # isolation: a module could be missing a require and the go.work
+      # resolution would paper over it. GOWORK=off forces each matrix leg
+      # to resolve strictly from its own go.mod.
+      GOWORK: "off"
     strategy:
       fail-fast: false
       matrix:
