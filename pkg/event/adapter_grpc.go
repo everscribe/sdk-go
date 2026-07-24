@@ -1,22 +1,9 @@
 package event
 
-// This file is the grpc-go server adapter.
-//
-// Unlike the HTTP adapters (Middleware, GinMiddleware, EchoV4Middleware,
-// FiberV3Middleware), this one names every RPC by default: both interceptors
-// stamp Action = info.FullMethod on the request-scoped event right after
-// Begin returns, so every RPC records unless the handler clears
-// Current(ctx).Action. The HTTP adapters leave Action empty and record
-// nothing unless a handler names the event explicitly. This divergence is
-// intentional, not a defect: gRPC method names are already a closed,
-// meaningful set (unlike arbitrary HTTP routes), so recording every call by
-// default is the more useful default here.
-//
-// The stamp lands on Current(ctx), not on the template passed to Begin, so
-// FromContext clones made inside a handler do NOT inherit the RPC method
-// name - they come back unnamed, like everywhere else, and are dropped by
-// the empty-Action guard every stock recorder applies unless the handler
-// names them.
+// This file is the grpc-go server adapter. See the package doc for how the
+// lifecycle works and for the two ways these interceptors diverge from the
+// HTTP adapters; the reasoning specific to this adapter is on
+// UnaryInterceptor and StreamInterceptor.
 
 import (
 	"context"
