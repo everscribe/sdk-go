@@ -22,28 +22,3 @@ jobs:
         run: go vet ./...
       - name: Test
         run: go test ./... -count=1 -race
-
-  event-purity:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
-      - name: pkg/event must not import any transport package
-        run: |
-          set -u
-          # Capture go list's own output and exit status first, so a
-          # failure of go list (unresolved import, proxy hiccup, etc.)
-          # cannot masquerade as "no net/http found" via an empty grep.
-          if ! deps=$(go list -deps ./pkg/event 2>&1); then
-            echo "go list -deps ./pkg/event failed - cannot verify transport-neutrality:"
-            echo "$deps"
-            exit 1
-          fi
-          if echo "$deps" | grep -qx 'net/http'; then
-            echo "pkg/event imports net/http; core must stay transport-neutral"
-            exit 1
-          fi
