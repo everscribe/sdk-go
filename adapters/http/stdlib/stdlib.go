@@ -4,8 +4,10 @@
 package stdlib
 
 import (
+	"bufio"
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
 
 	"github.com/everscribe/sdk-go/pkg/event"
@@ -62,6 +64,16 @@ func New(opts Options) func(http.Handler) http.Handler {
 
 // responseWriter captures the final status and doubles as the
 // event.OutcomeCapture.
+//
+// Embedding http.ResponseWriter only promotes the three methods that
+// interface declares (Header, Write, WriteHeader). It does not make
+// responseWriter satisfy http.Flusher, http.Hijacker, or anything else the
+// underlying writer might implement, so a handler behind this middleware
+// that needs SSE (Flusher) or a websocket upgrade (Hijacker) would silently
+// lose that capability. Unwrap lets http.ResponseController reach through
+// to the real writer; Flush and Hijack are explicit passthroughs for
+// callers that type-assert directly instead of going through the
+// controller.
 type responseWriter struct {
 	http.ResponseWriter
 	status      int
@@ -82,6 +94,37 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 		rw.wroteHeader = true
 	}
 	return rw.ResponseWriter.Write(b)
+}
+
+// Unwrap returns the wrapped http.ResponseWriter. http.ResponseController
+// uses this to reach optional interfaces (Flusher, Hijacker, and the rest)
+// that responseWriter does not itself implement, per the Unwrap contract
+// ResponseController documents.
+func (rw *responseWriter) Unwrap() http.ResponseWriter {
+	return rw.ResponseWriter
+}
+
+// Flush implements http.Flusher for callers that type-assert directly
+// rather than going through http.ResponseController. no-ops when the
+// underlying writer does not support flushing, the same as a bare
+// http.ResponseWriter that lacks Flusher would from the caller's
+// perspective (a failed type assertion just skips the call).
+func (rw *responseWriter) Flush() {
+	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Hijack implements http.Hijacker for callers that type-assert directly
+// rather than going through http.ResponseController. Returns
+// http.ErrNotSupported when the underlying writer does not support
+// hijacking, matching net/http's own convention for writers without it.
+func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hj, ok := rw.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, http.ErrNotSupported
+	}
+	return hj.Hijack()
 }
 
 // Outcome implements event.OutcomeCapture. ok is false until a response is

@@ -1,12 +1,14 @@
 package stdlib_test
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -382,4 +384,88 @@ func TestFlagUnderContention(t *testing.T) {
 	<-finished
 
 	require.Empty(t, spy.events(), "every PrepareEvent marked it; end must skip")
+}
+
+// TestFlush_SupportsServerSentEvents is the I4 falsification. responseWriter
+// embeds http.ResponseWriter with no Unwrap, Flush, or Hijack, so
+// http.ResponseController and direct http.Flusher type assertions both stop
+// working behind this middleware, breaking SSE and any other handler that
+// needs to push a partial response before it finishes.
+//
+// The handler writes a first chunk, flushes it explicitly, then blocks on
+// release before writing a second chunk. Without a working Flush the first
+// chunk sits in net/http's own write buffer until the handler returns, so
+// the client would never observe it before release is closed.
+func TestFlush_SupportsServerSentEvents(t *testing.T) {
+	t.Parallel()
+	spy := &spyRecorder{callPrepare: true}
+	release := make(chan struct{})
+
+	srv, finished := serve(t, spy, func(w http.ResponseWriter, r *http.Request) {
+		event.Current(r.Context()).Action = "stream.tail"
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, werr := w.Write([]byte("data: first\n\n"))
+		require.NoError(t, werr)
+		require.NoError(t, http.NewResponseController(w).Flush(),
+			"http.NewResponseController(w).Flush() must reach the underlying writer")
+		<-release
+		_, _ = w.Write([]byte("data: second\n\n"))
+	})
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	reader := bufio.NewReader(resp.Body)
+	firstChunkSeen := make(chan string, 1)
+	go func() {
+		line, _ := reader.ReadString('\n')
+		firstChunkSeen <- line
+	}()
+
+	select {
+	case line := <-firstChunkSeen:
+		require.True(t, strings.Contains(line, "first"),
+			"expected the flushed first chunk, got %q", line)
+	case <-time.After(2 * time.Second):
+		t.Fatal("first chunk never arrived before release: Flush did not propagate to the client")
+	}
+
+	close(release)
+	<-finished
+}
+
+// TestHijack_TypeAssertionSucceeds is the I4 falsification for websocket
+// upgrades. A handler behind this middleware type-asserts
+// w.(http.Hijacker) exactly as it would with no middleware mounted;
+// responseWriter must implement Hijack for that to succeed.
+func TestHijack_TypeAssertionSucceeds(t *testing.T) {
+	t.Parallel()
+	spy := &spyRecorder{callPrepare: true}
+	hijackerOK := make(chan bool, 1)
+
+	srv, finished := serve(t, spy, func(w http.ResponseWriter, r *http.Request) {
+		event.Current(r.Context()).Action = "ws.upgrade"
+		hj, ok := w.(http.Hijacker)
+		hijackerOK <- ok
+		if !ok {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		conn, _, err := hj.Hijack()
+		require.NoError(t, err)
+		conn.Close()
+	})
+
+	resp, err := http.Get(srv.URL) //nolint:bodyclose // the handler hijacks and closes the connection itself
+	if err == nil {
+		resp.Body.Close()
+	}
+	<-finished
+
+	require.True(t, <-hijackerOK,
+		"responseWriter must implement http.Hijacker for the type assertion to succeed")
 }
