@@ -115,6 +115,30 @@ func TestStream_ContextThreadsToHandler(t *testing.T) {
 	require.Equal(t, "abc123", got[0].Metadata["cursor"])
 }
 
+// TestStream_CloneInsideHandlerStaysUnnamed is the I5 falsification for
+// the stream path: StreamInterceptor used to set Action: info.FullMethod
+// on the template too, so a FromContext clone made inside the stream
+// handler inherited the RPC method name instead of coming back unnamed.
+func TestStream_CloneInsideHandlerStaysUnnamed(t *testing.T) {
+	t.Parallel()
+	spy := &spyRecorder{}
+	var clone *event.Event
+
+	err := invokeStream(t, spy, func(srv any, stream googlegrpc.ServerStream) error {
+		clone = event.FromContext(stream.Context())
+		return nil
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, clone)
+	require.Empty(t, clone.Action,
+		"a FromContext clone must not inherit the RPC method name from the template")
+
+	got := spy.events()
+	require.Len(t, got, 1, "only the primary event auto-records")
+	require.Equal(t, "/everscribe.v1.Tail/Watch", got[0].Action)
+}
+
 // TestStream_ErrorRecordsHTTPEquivalentCode covers outcome mapping: a
 // stream handler's returned gRPC error records the same HTTP-equivalent
 // code the unary path does.

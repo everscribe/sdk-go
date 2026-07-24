@@ -110,6 +110,33 @@ func TestUnary_OriginFromMetadataAndPeer(t *testing.T) {
 	require.Equal(t, "req-abc", got.Origin.RequestID)
 }
 
+// TestUnary_CloneInsideHandlerStaysUnnamed is the I5 falsification.
+// UnaryInterceptor used to set Action: info.FullMethod on the template
+// passed to Begin, so every event.FromContext clone made inside the
+// handler silently inherited the RPC method name instead of coming back
+// unnamed. A secondary event the handler never explicitly named would then
+// get auto-named after the RPC and recorded, rather than being dropped by
+// the empty-Action guard every stock recorder applies
+// (pkg/recorder/http.go, pkg/recorder/buffered.go). The primary
+// request-scoped event must still record under the full method name.
+func TestUnary_CloneInsideHandlerStaysUnnamed(t *testing.T) {
+	t.Parallel()
+	spy := &spyRecorder{}
+	var clone *event.Event
+	invoke(t, spy, func(ctx context.Context, req any) (any, error) {
+		clone = event.FromContext(ctx)
+		return nil, nil
+	})
+
+	require.NotNil(t, clone)
+	require.Empty(t, clone.Action,
+		"a FromContext clone must not inherit the RPC method name from the template")
+
+	got := spy.events()
+	require.Len(t, got, 1, "only the primary event auto-records")
+	require.Equal(t, "/everscribe.v1.Ingest/Record", got[0].Action)
+}
+
 func TestUnary_HandlerCanOverrideAction(t *testing.T) {
 	t.Parallel()
 	spy := &spyRecorder{}

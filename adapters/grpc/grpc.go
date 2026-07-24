@@ -3,6 +3,22 @@
 // It sits at the protocol level, as a peer of the http adapters rather
 // than a sibling of gin. If Connect support is added later it becomes
 // adapters/connect, since Connect is its own protocol.
+//
+// Unlike the HTTP adapters, this one names every RPC by default: both
+// interceptors stamp Action = info.FullMethod on the request-scoped event
+// right after Begin returns, so every RPC records unless the handler
+// clears event.Current(ctx).Action. The HTTP adapters (stdlib, gin, echo,
+// fiber) leave Action empty and record nothing unless a handler names the
+// event explicitly. This divergence is intentional, not a defect: gRPC
+// method names are already a closed, meaningful set (unlike arbitrary HTTP
+// routes), so recording every call by default is the more useful default
+// here.
+//
+// The stamp lands on event.Current(ctx), not on the template passed to
+// Begin, so event.FromContext clones made inside a handler do NOT inherit
+// the RPC method name - they come back unnamed, like everywhere else, and
+// are dropped by the empty-Action guard every stock recorder applies
+// unless the handler names them.
 package grpc
 
 import (
@@ -62,10 +78,15 @@ func UnaryInterceptor(opts Options) googlegrpc.UnaryServerInterceptor {
 		oc := &statusCapture{}
 		tmpl := &event.Event{
 			Actor:  resolve(ctx),
-			Action: info.FullMethod,
 			Origin: originFrom(ctx),
 		}
 		ctx, end := event.Begin(ctx, tmpl, oc, opts.Recorder, logger)
+		// Stamped on the request-scoped event, not the template: a template
+		// Action would flow into every event.FromContext clone the handler
+		// makes, so a secondary event the handler never named would inherit
+		// the RPC method name instead of being dropped by the empty-Action
+		// guard every stock recorder applies.
+		event.Current(ctx).Action = info.FullMethod
 		defer end() // runs after oc.set below, since defers run last
 
 		resp, err := handler(ctx, req)
@@ -94,10 +115,13 @@ func StreamInterceptor(opts Options) googlegrpc.StreamServerInterceptor {
 		oc := &statusCapture{}
 		tmpl := &event.Event{
 			Actor:  resolve(parent),
-			Action: info.FullMethod,
 			Origin: originFrom(parent),
 		}
 		ctx, end := event.Begin(parent, tmpl, oc, opts.Recorder, logger)
+		// See the matching comment in UnaryInterceptor: stamped on the
+		// request-scoped event, not the template, so FromContext clones stay
+		// unnamed.
+		event.Current(ctx).Action = info.FullMethod
 		defer end()
 
 		err := handler(srv, &wrappedStream{ServerStream: ss, ctx: ctx})
