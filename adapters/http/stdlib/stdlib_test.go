@@ -258,3 +258,81 @@ func TestClientDisconnect_StillRecords(t *testing.T) {
 		t.Fatal("event was dropped: end() recorded against a canceled context")
 	}
 }
+
+func TestNilResolverDefaultsToAnonymous(t *testing.T) {
+	t.Parallel()
+	spy := &spyRecorder{callPrepare: true}
+	srv, finished := serve(t, spy, func(w http.ResponseWriter, r *http.Request) {
+		event.Current(r.Context()).Action = "user.login"
+		w.WriteHeader(http.StatusOK)
+	})
+
+	resp, err := http.Get(srv.URL)
+	require.NoError(t, err)
+	resp.Body.Close()
+	<-finished
+
+	require.Equal(t, "anonymous", spy.events()[0].Actor.Type)
+}
+
+func TestOriginPopulatedFromRequest(t *testing.T) {
+	t.Parallel()
+	spy := &spyRecorder{callPrepare: true}
+	srv, finished := serve(t, spy, func(w http.ResponseWriter, r *http.Request) {
+		event.Current(r.Context()).Action = "user.login"
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+	require.NoError(t, err)
+	req.Header.Set("User-Agent", "curl/8.0")
+	req.Header.Set("X-Request-ID", "req-abc")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	resp.Body.Close()
+	<-finished
+
+	got := spy.events()[0]
+	require.Equal(t, "curl/8.0", got.Origin.UserAgent)
+	require.Equal(t, "req-abc", got.Origin.RequestID)
+	require.NotEmpty(t, got.Origin.IP)
+}
+
+// TestFlagUnderContention drives the CAS from two goroutines through a
+// synthetic driver rather than two real Record calls. Two concurrent
+// Records would fail -race on ID, OccurredAt, Result, and IdempotencyKey
+// for reasons unrelated to the flag, which is a race the design permits
+// and the concurrency contract forbids.
+func TestFlagUnderContention(t *testing.T) {
+	t.Parallel()
+	spy := &spyRecorder{callPrepare: true}
+	srv, finished := serve(t, spy, func(w http.ResponseWriter, r *http.Request) {
+		e := event.Current(r.Context())
+		e.Action = "user.login"
+		w.WriteHeader(http.StatusOK)
+		// Preset, matching the precedent in pkg/event/lifecycle_test.go's
+		// TestEnd_RacesWithPrepareEvent: every goroutine's applyOutcome call
+		// becomes a pure read (the "already set" branch), isolating the race
+		// to the recorded flag itself instead of tripping the already-known,
+		// accepted data race on Event.Result when two callers populate the
+		// same outcome concurrently.
+		e.Result = event.Result{Status: "ok", Code: 200}
+
+		var wg sync.WaitGroup
+		for i := 0; i < 8; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				event.PrepareEvent(r.Context(), e)
+			}()
+		}
+		wg.Wait()
+	})
+
+	resp, err := http.Get(srv.URL)
+	require.NoError(t, err)
+	resp.Body.Close()
+	<-finished
+
+	require.Empty(t, spy.events(), "every PrepareEvent marked it; end must skip")
+}
