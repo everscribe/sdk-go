@@ -38,7 +38,7 @@ for [embeddable components](https://github.com/everscribe/components).
 - `fiber v3`
 
 > [!NOTE]
-> Interceptors are also available for gRPC servers.
+> Interceptors available for gRPC servers.
 
 Your framework missing? [Open an issue](https://github.com/everscribe/sdk-go/issues).
 
