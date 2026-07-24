@@ -177,12 +177,23 @@ func (b *BufferedRecorder) Record(ctx context.Context, e *event.Event) error {
 		return nil
 	default:
 	}
-	event.PrepareEvent(ctx, e)
+
+	// PrepareEventFields fills ID, OccurredAt, and Result on e now, so the
+	// copy sent below is fully prepared, but defers the dedupe mark: every
+	// policy below has a path that discards the event instead of enqueuing
+	// it (a canceled or stopped PolicyBlock, a full buffer under
+	// PolicyError or PolicyDropNewest). Marking the request-scoped event
+	// recorded before it actually lands in the buffer would suppress
+	// end()'s auto-record backstop on exactly the events that get dropped,
+	// losing them for good instead of leaving them retryable. mark is only
+	// invoked once a send below has actually succeeded.
+	mark := event.PrepareEventFields(ctx, e)
 
 	switch b.cfg.overflow {
 	case PolicyBlock:
 		select {
 		case b.events <- *e:
+			mark()
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
@@ -193,6 +204,7 @@ func (b *BufferedRecorder) Record(ctx context.Context, e *event.Event) error {
 	case PolicyError:
 		select {
 		case b.events <- *e:
+			mark()
 			return nil
 		default:
 			return ErrBufferFull
@@ -201,6 +213,7 @@ func (b *BufferedRecorder) Record(ctx context.Context, e *event.Event) error {
 	default: // PolicyDropNewest
 		select {
 		case b.events <- *e:
+			mark()
 			return nil
 		default:
 			n := b.dropped.Add(1)

@@ -68,6 +68,36 @@ func TestOriginFrom_EmptyHeaderClosure(t *testing.T) {
 	require.Equal(t, Origin{}, got, "adapters with no headers pass a closure returning empty")
 }
 
+// TestClientIPFrom_PortStripping is the falsification for I2. clientIPFrom
+// used to strip everything after the last colon unconditionally, assuming
+// remoteAddr was always "host:port". That corrupts a bare IPv6 literal (no
+// brackets, no port, but multiple colons of its own): "2001:db8::1" became
+// "2001:db8:" and "::1" became ":". Stripping a trailing port is only
+// unambiguous for bracketed IPv6 ("[::1]:8080") or a plain host:port with
+// exactly one colon; a bare IPv6 literal must come back unchanged.
+func TestClientIPFrom_PortStripping(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		remoteAddr string
+		want       string
+	}{
+		{"ipv4 with port", "203.0.113.9:54321", "203.0.113.9"},
+		{"ipv4 without port", "203.0.113.9", "203.0.113.9"},
+		{"bracketed ipv6 with port", "[2001:db8::1]:54321", "2001:db8::1"},
+		{"bare ipv6 without port", "2001:db8::1", "2001:db8::1"},
+		{"bare loopback ipv6 without port", "::1", "::1"},
+		{"empty", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := OriginFrom(func(string) string { return "" }, tt.remoteAddr)
+			require.Equal(t, tt.want, got.IP)
+		})
+	}
+}
+
 type stubCapture struct {
 	result Result
 	ok     bool

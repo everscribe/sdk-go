@@ -71,19 +71,30 @@ func (c *captureBatchRec) batchSnapshot() ([][]event.Event, int) {
 }
 
 // blockingRec blocks every Record call on a channel so tests can hold
-// the inner recorder in flight to exercise back-pressure paths.
+// the inner recorder in flight to exercise back-pressure paths. actions
+// records the Action of every event that actually reached Record, so
+// tests can confirm whether a given event made it through, not just how
+// many calls happened.
 type blockingRec struct {
 	release chan struct{}
 	calls   int
+	actions []string
 	mu      sync.Mutex
 }
 
 func (b *blockingRec) Record(_ context.Context, e *event.Event) error {
 	b.mu.Lock()
 	b.calls++
+	b.actions = append(b.actions, e.Action)
 	b.mu.Unlock()
 	<-b.release
 	return nil
+}
+
+func (b *blockingRec) snapshot() ([]string, int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]string(nil), b.actions...), b.calls
 }
 
 // helper to build a BufferedRecorder with sensible test defaults: no
@@ -500,4 +511,69 @@ func TestBufferedRecorder_Stats_TracksFlushed(t *testing.T) {
 func TestBufferedRecorder_ImplementsRecorder(t *testing.T) {
 	t.Parallel()
 	var _ Recorder = (*BufferedRecorder)(nil)
+}
+
+// TestBufferedRecorder_DroppedEvent_IsNotMarkedRecorded is the falsification
+// for I3: Record used to call event.PrepareEvent before the overflow-policy
+// switch, so an event dropped under PolicyDropNewest (or PolicyError, or a
+// canceled PolicyBlock) was already marked recorded on the request-scoped
+// event. That marking makes end()'s CompareAndSwap a no-op, so the auto-record
+// backstop never fires and the event is lost entirely, not just delayed.
+//
+// This fills a buffer-size-1 recorder so the request-scoped event is
+// dropped, then calls end() and confirms the event still reaches the inner
+// recorder once the buffer has room. That is only possible if the dropped
+// Record call left the recorded flag untouched, since end() only records
+// when its CompareAndSwap(false, true) succeeds.
+func TestBufferedRecorder_DroppedEvent_IsNotMarkedRecorded(t *testing.T) {
+	t.Parallel()
+	blocker := &blockingRec{release: make(chan struct{})}
+	b := NewBufferedRecorder(blocker,
+		WithBufferSize(1),
+		WithFlushSize(1),
+		WithFlushInterval(time.Hour),
+		WithOverflowPolicy(PolicyDropNewest),
+		WithSlogLogger(silentLogger()),
+	)
+	t.Cleanup(func() { _ = b.Close() })
+
+	ctx, end := event.Begin(context.Background(), &event.Event{}, nil, b, nil)
+	event.Current(ctx).Action = "test.dropped"
+
+	// Fill the buffer: the background goroutine picks up "a.one" and blocks
+	// inside inner.Record, holding the single buffer slot occupied by
+	// "a.two" once it is enqueued.
+	require.NoError(t, b.Record(context.Background(), event.New("a.one")))
+	require.Eventually(t, func() bool {
+		_, calls := blocker.snapshot()
+		return calls == 1
+	}, time.Second, 5*time.Millisecond)
+	require.NoError(t, b.Record(context.Background(), event.New("a.two")))
+
+	// The request-scoped event finds the buffer full and is dropped under
+	// the default PolicyDropNewest.
+	require.NoError(t, b.Record(ctx, event.Current(ctx)))
+	require.Equal(t, int64(1), b.Stats().Dropped, "the request-scoped event must be counted as dropped")
+
+	// Release the blocked inner call so the buffer drains.
+	close(blocker.release)
+	require.Eventually(t, func() bool {
+		_, calls := blocker.snapshot()
+		return calls >= 2
+	}, time.Second, 5*time.Millisecond)
+
+	// end() must still record the dropped event now that there is room: if
+	// Record had already marked it recorded before the drop, this
+	// CompareAndSwap would no-op and "test.dropped" would never reach the
+	// inner recorder.
+	end()
+	require.Eventually(t, func() bool {
+		actions, _ := blocker.snapshot()
+		for _, a := range actions {
+			if a == "test.dropped" {
+				return true
+			}
+		}
+		return false
+	}, time.Second, 5*time.Millisecond, "the dropped event must still be recorded by end() once the buffer has room")
 }

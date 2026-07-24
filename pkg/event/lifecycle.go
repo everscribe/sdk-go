@@ -121,19 +121,31 @@ func (st *requestState) end(ctx context.Context) {
 	recCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
 	defer cancel()
 
-	applyOutcome(st, st.current)
+	applyOutcome(st, st.current, true)
 	if err := st.recorder.Record(recCtx, st.current); err != nil && st.logger != nil {
 		st.logger.Error("everscribe: auto-record failed", "error", err)
 	}
 }
 
-// applyOutcome fills Result from the capture when the handler has not set one.
-func applyOutcome(st *requestState, e *Event) {
+// applyOutcome fills Result from the capture when the handler has not set
+// one. final distinguishes end(), which runs after the handler has
+// genuinely completed and is guaranteed to be the last word on the
+// event's outcome, from PrepareEvent, which can run mid-handler (see the
+// multiple-events-per-handler pattern in pkg/recorder/doc.go). Only a
+// final caller may stamp the "no response written" sentinel when the
+// capture reports ok == false: from PrepareEvent, ok == false just means
+// "nothing written yet", not "nothing ever will be", and stamping the
+// sentinel there would bake a false error into an event recorded before
+// the response.
+func applyOutcome(st *requestState, e *Event, final bool) {
 	if e.Result.Status != "" || st.capture == nil {
 		return
 	}
 	if r, ok := st.capture.Outcome(); ok {
 		e.Result = r
+		return
+	}
+	if !final {
 		return
 	}
 	// ok == false: no response was produced. Keeps today's diagnostic, which
@@ -190,10 +202,37 @@ func clientIPFrom(header func(name string) string, remoteAddr string) string {
 	if xri := header("X-Real-IP"); xri != "" {
 		return xri
 	}
-	for i := len(remoteAddr) - 1; i >= 0; i-- {
-		if remoteAddr[i] == ':' {
-			return remoteAddr[:i]
+	return stripPort(remoteAddr)
+}
+
+// stripPort removes a trailing ":port" from remoteAddr, but only when doing
+// so is unambiguous: a bracketed IPv6 host ("[::1]:8080", host returned
+// without the brackets), or a plain host:port pair with exactly one colon
+// ("127.0.0.1:54321"). A bare IPv6 literal has no brackets and more than one
+// colon of its own ("2001:db8::1", "::1") and is returned unchanged - there
+// is no port to strip, and naively truncating after the last colon corrupts
+// the address (formerly "2001:db8::1" -> "2001:db8:", "::1" -> ":").
+func stripPort(remoteAddr string) string {
+	if remoteAddr == "" {
+		return remoteAddr
+	}
+	if remoteAddr[0] == '[' {
+		for i := 1; i < len(remoteAddr); i++ {
+			if remoteAddr[i] == ']' {
+				return remoteAddr[1:i]
+			}
 		}
+		return remoteAddr
+	}
+	colons, last := 0, -1
+	for i := 0; i < len(remoteAddr); i++ {
+		if remoteAddr[i] == ':' {
+			colons++
+			last = i
+		}
+	}
+	if colons == 1 {
+		return remoteAddr[:last]
 	}
 	return remoteAddr
 }

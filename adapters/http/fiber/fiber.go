@@ -1,9 +1,19 @@
 // Package fiber is the gofiber/fiber v3 adapter.
 //
 // Fiber is built on fasthttp rather than net/http, so there is no
-// *http.Request to reach for: headers come from c.Get, the client IP from
-// c.IP(), and the status from c.Response().StatusCode(). This is the one
-// adapter where the abstraction leaks, and it is contained here.
+// *http.Request to reach for: headers come from c.Get, the remote address
+// from c.RequestCtx().RemoteAddr(), and the status from
+// c.Response().StatusCode(). This is the one adapter where the abstraction
+// leaks, and it is contained here.
+//
+// The remote address deliberately goes through RequestCtx().RemoteAddr()
+// rather than the more obvious c.IP(): c.IP() returns a bare IP with no
+// port, but event.OriginFrom's remoteAddr parameter expects a real
+// host:port pair (it strips a trailing port when present). Passing a bare
+// IPv6 literal there corrupts it - "2001:db8::1" would come back as
+// "2001:db8:" - because the bare address has colons of its own that look
+// like a port separator. RemoteAddr().String() always includes the port
+// (and brackets IPv6 hosts), so it is unambiguous.
 //
 // v3 only. In v3, fiber.Ctx implements context.Context via Context() and
 // SetContext, so ActorResolver takes it directly. v2 used c.UserContext()
@@ -73,7 +83,7 @@ func New(opts Options) fiberv3.Handler {
 			Actor: resolve(c.Context()),
 			Origin: event.OriginFrom(
 				func(name string) string { return c.Get(name) },
-				c.IP(),
+				c.RequestCtx().RemoteAddr().String(),
 			),
 		}
 		ctx, end := event.Begin(c.Context(), tmpl, oc, opts.Recorder, logger)

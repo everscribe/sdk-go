@@ -259,6 +259,53 @@ func TestClientDisconnect_StillRecords(t *testing.T) {
 	}
 }
 
+// TestMidHandlerRecord_DoesNotStampNoResponseWritten is the falsification for
+// C1. PrepareEvent used to run applyOutcome's ok == false fallback
+// unconditionally, so a FromContext clone recorded before the response is
+// written - the pattern pkg/recorder/doc.go recommends for multiple events
+// per handler - got a false "no response written" error baked into an
+// immutable audit record, even though the handler simply had not written a
+// response YET, not because it never would. That sentinel must be reserved
+// for end(), which runs after the handler has genuinely finished.
+func TestMidHandlerRecord_DoesNotStampNoResponseWritten(t *testing.T) {
+	t.Parallel()
+	spy := &spyRecorder{callPrepare: true}
+	srv, finished := serve(t, spy, func(w http.ResponseWriter, r *http.Request) {
+		event.Current(r.Context()).Action = "user.login"
+
+		mid := event.FromContext(r.Context())
+		mid.Action = "user.login.attempt"
+		require.NoError(t, spy.Record(r.Context(), mid)) // recorded before any write
+
+		w.WriteHeader(http.StatusOK)
+	})
+
+	resp, err := http.Get(srv.URL)
+	require.NoError(t, err)
+	resp.Body.Close()
+	<-finished
+
+	got := spy.events()
+	require.Len(t, got, 2, "both the mid-handler clone and the auto-recorded event must land")
+
+	var midEvent, autoEvent event.Event
+	for _, e := range got {
+		if e.Action == "user.login.attempt" {
+			midEvent = e
+		} else {
+			autoEvent = e
+		}
+	}
+
+	require.NotEqual(t, "error", midEvent.Result.Status,
+		"a mid-handler record must not be stamped with the final-outcome sentinel")
+	require.NotEqual(t, "no response written", midEvent.Result.Message,
+		"the response had not been written YET, which is not the same as never")
+
+	require.Equal(t, "ok", autoEvent.Result.Status, "the auto-recorded event must still get the real outcome")
+	require.Equal(t, 200, autoEvent.Result.Code)
+}
+
 func TestNilResolverDefaultsToAnonymous(t *testing.T) {
 	t.Parallel()
 	spy := &spyRecorder{callPrepare: true}

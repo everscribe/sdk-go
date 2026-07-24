@@ -205,10 +205,39 @@ func (e *Event) RawDiff(before, after, patch json.RawMessage) *Event {
 // is unset. Recorder implementations call this on each Event before
 // persisting so handlers can rely on auto-populated fields.
 //
+// Result population here is never final: PrepareEvent can run mid-handler
+// (see the multiple-events-per-handler pattern in pkg/recorder/doc.go), so
+// when the capture reports ok == false it leaves Result untouched instead
+// of stamping the "no response written" sentinel. From here, ok == false
+// only means "nothing written yet", not "nothing ever will be" - that
+// sentinel is end()'s to stamp, since only end() runs after the handler
+// has genuinely finished.
+//
 // It also has a dedupe side effect, which is not obvious from the name:
 // when e is the request-scoped event installed by Begin, PrepareEvent marks
-// it recorded so the adapter's end does not submit it a second time.
+// it recorded so the adapter's end does not submit it a second time. This
+// only records that a submission happened; it cannot abort one, so a
+// recorder that might still discard e after this call (for example a
+// buffered recorder whose overflow policy drops the event) must not call
+// PrepareEvent directly, since the mark cannot be undone once the event is
+// lost. Use PrepareEventFields instead and only invoke the returned mark
+// func once the event has actually been accepted.
 func PrepareEvent(ctx context.Context, e *Event) {
+	mark := PrepareEventFields(ctx, e)
+	mark()
+}
+
+// PrepareEventFields performs the same field population as PrepareEvent
+// (ID, OccurredAt, Result) but defers the dedupe mark: it returns a func
+// that must be called once the caller has committed to actually recording
+// e. Skipping the returned func leaves the request-scoped event eligible
+// for end()'s auto-record backstop, which is what lets a recorder abandon
+// a dropped event correctly instead of losing it silently.
+//
+// The returned func is a no-op when e is not the request-scoped event
+// installed by Begin - pointer identity, not ID equality, since
+// FromContext clones are distinct events and must not be suppressed.
+func PrepareEventFields(ctx context.Context, e *Event) (mark func()) {
 	if e.ID == "" {
 		e.ID = uuid.NewString()
 	}
@@ -218,18 +247,13 @@ func PrepareEvent(ctx context.Context, e *Event) {
 
 	st, ok := ctx.Value(requestStateKey{}).(*requestState)
 	if !ok || st == nil {
-		return
+		return func() {}
 	}
-	applyOutcome(st, e)
-	// Pointer identity, not ID equality: FromContext clones are distinct
-	// events and must not be suppressed. This only records that a
-	// submission happened; it cannot abort one, because PrepareEvent
-	// returns nothing and both recorders send unconditionally after
-	// calling it. It suppresses the adapter path; the idempotency key
-	// covers the reverse ordering.
-	if e == st.current {
-		st.recorded.Store(true)
+	applyOutcome(st, e, false)
+	if e != st.current {
+		return func() {}
 	}
+	return func() { st.recorded.Store(true) }
 }
 
 // marshalRedacted marshals v to JSON, then walks the result and replaces
