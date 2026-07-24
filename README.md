@@ -27,7 +27,6 @@ for [embeddable components](https://github.com/everscribe/components).
 | [Hosted AI agent](https://everscribe.io/docs/quickstart/hosted-ui) | You install our GitHub App. Our server-side agent walks your repo, proposes a plan, and opens a PR you review. | You want zero hand-wiring and are fine granting the GitHub App read access. |
 | [BYOK Claude Code skill](https://everscribe.io/docs/quickstart/skill) | A skill runs inside *your* Claude Code session against *your* Anthropic key. Same behavior, source never leaves your machine. | You want AI-driven setup without connecting a GitHub App. |
 | [Wire it up yourself](https://everscribe.io/docs/sdks/go-install) | Install the SDK and add the calls by hand. | You want full control, or you are instrumenting a small surface. |
-| [Runnable examples](https://github.com/everscribe/examples) | End-to-end sample apps, front end through back end. | You would rather read working code than docs. |
 
 ## Supported frameworks
 
@@ -65,3 +64,14 @@ assume one framework's behavior carries to another.
 
 A framework missing? [Open an issue](https://github.com/everscribe/sdk-go/issues).
 Adding one is a single file against the same lifecycle.
+
+## Additional resources
+
+[Runnable examples](https://github.com/everscribe/examples): end-to-end sample
+apps, front end through back end, for every Everscribe SDK.
+
+[Embeddable components](https://github.com/everscribe/components): drop-in audit
+trail UI, mounted with tokens from this SDK's minter.
+
+[API reference](https://pkg.go.dev/github.com/everscribe/sdk-go): full godoc for
+every package here.
