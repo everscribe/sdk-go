@@ -1,4 +1,12 @@
-// Package fiber is the gofiber/fiber v3 adapter.
+package adapters
+
+import (
+	fiberv3 "github.com/gofiber/fiber/v3"
+
+	"github.com/everscribe/sdk-go/pkg/event"
+)
+
+// FiberEventMiddleware is the gofiber/fiber v3 adapter.
 //
 // Fiber is built on fasthttp rather than net/http, so there is no
 // *http.Request to reach for: headers come from c.Get, the remote address
@@ -22,55 +30,7 @@
 // fasthttp accessor to RequestCtx()), so a v2 adapter would need its own
 // module.
 //
-// Limitation: fasthttp's Response.StatusCode() defaults to 200 whether or
-// not a handler wrote anything, and fiber keeps no "was anything written"
-// flag on Ctx or on the underlying fasthttp response. So this adapter
-// cannot distinguish "handler returned nil without writing" from "handler
-// wrote a 200" by inspecting the response alone; both look identical at
-// that layer, unlike gin's Writer.Written() or echo's Response().Committed.
-// Completion is instead tracked explicitly: the capture's completed field
-// is set only after c.Next() returns, so a handler that panics never sets
-// it and Outcome reports ok == false, same as an in-flight request. A
-// handler that returns nil having written nothing is indistinguishable
-// from one that wrote 200, and is recorded as ok == true, Result{Code:
-// 200, Status: "ok"}.
-package fiber
-
-import (
-	"context"
-	"log/slog"
-
-	fiberv3 "github.com/gofiber/fiber/v3"
-
-	"github.com/everscribe/sdk-go/pkg/event"
-)
-
-// Options configures the middleware. Same shape as every other adapter.
-type Options struct {
-	// Resolve derives the Actor. nil yields an anonymous actor.
-	Resolve event.ActorResolver
-	// Recorder receives the auto-recorded event. nil installs the event
-	// but does not auto-record.
-	Recorder event.Recorder
-	// Logger receives record failures. nil defaults to slog.Default().
-	Logger event.Logger
-}
-
-func (o Options) resolve() event.ActorResolver {
-	if o.Resolve == nil {
-		return func(context.Context) event.Actor { return event.Actor{Type: "anonymous"} }
-	}
-	return o.Resolve
-}
-
-func (o Options) logger() event.Logger {
-	if o.Logger == nil {
-		return slog.Default()
-	}
-	return o.Logger
-}
-
-// New returns fiber middleware that installs a per-request event and
+// It returns fiber middleware that installs a per-request event and
 // records it once after the handler chain completes. Handlers reach it
 // with event.Current(c.Context()).
 //
@@ -81,11 +41,11 @@ func (o Options) logger() event.Logger {
 // middleware's own defer instead of skipping it: the audited event still
 // records with ok == false, and recover then converts the panic into the
 // response.
-func New(opts Options) fiberv3.Handler {
+func FiberEventMiddleware(opts Options) fiberv3.Handler {
 	resolve, logger := opts.resolve(), opts.logger()
 
 	return func(c fiberv3.Ctx) error {
-		oc := &capture{c: c}
+		oc := &fiberCapture{c: c}
 		tmpl := &event.Event{
 			Actor: resolve(c.Context()),
 			Origin: event.OriginFrom(
@@ -103,21 +63,27 @@ func New(opts Options) fiberv3.Handler {
 	}
 }
 
-// capture reads fiber's response state.
+// fiberCapture reads fiber's response state.
 //
-// Fiber has no "was anything written" flag: Response().StatusCode()
-// defaults to 200 whether or not the handler wrote. So completion is
-// tracked explicitly instead. A panicking handler never sets it, which is
-// what makes ok == false meaningful here. See the package doc comment for
-// the resulting limitation: a handler that writes nothing and returns nil
-// is recorded identically to one that wrote a real 200.
-type capture struct {
+// Limitation: fasthttp's Response.StatusCode() defaults to 200 whether or
+// not a handler wrote anything, and fiber keeps no "was anything written"
+// flag on Ctx or on the underlying fasthttp response. So this adapter
+// cannot distinguish "handler returned nil without writing" from "handler
+// wrote a 200" by inspecting the response alone; both look identical at
+// that layer, unlike gin's Writer.Written() or echo's Response().Committed.
+// Completion is instead tracked explicitly: the capture's completed field
+// is set only after c.Next() returns, so a handler that panics never sets
+// it and Outcome reports ok == false, same as an in-flight request. A
+// handler that returns nil having written nothing is indistinguishable
+// from one that wrote 200, and is recorded as ok == true, Result{Code:
+// 200, Status: "ok"}.
+type fiberCapture struct {
 	c         fiberv3.Ctx
 	completed bool
 }
 
 // Outcome implements event.OutcomeCapture.
-func (oc *capture) Outcome() (event.Result, bool) {
+func (oc *fiberCapture) Outcome() (event.Result, bool) {
 	if !oc.completed {
 		return event.Result{}, false
 	}

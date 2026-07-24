@@ -1,52 +1,27 @@
-package echo_test
+package adapters_test
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
-	"sync"
 	"testing"
 
 	echov4 "github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
 
-	everecho "github.com/everscribe/sdk-go/adapters/http/echo"
 	"github.com/everscribe/sdk-go/pkg/event"
+	"github.com/everscribe/sdk-go/pkg/http/adapters"
 )
-
-type spyRecorder struct {
-	mu  sync.Mutex
-	got []event.Event
-}
-
-func (s *spyRecorder) Record(ctx context.Context, e *event.Event) error {
-	event.PrepareEvent(ctx, e)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.got = append(s.got, *e)
-	return nil
-}
-
-func (s *spyRecorder) events() []event.Event {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]event.Event(nil), s.got...)
-}
-
-type nopLogger struct{}
-
-func (nopLogger) Error(string, ...any) {}
 
 func newEcho(spy *spyRecorder, h echov4.HandlerFunc) *echov4.Echo {
 	e := echov4.New()
-	e.Use(everecho.New(everecho.Options{Recorder: spy, Logger: nopLogger{}}))
+	e.Use(adapters.EchoEventMiddleware(adapters.Options{Recorder: spy, Logger: nopLogger{}}))
 	e.GET("/", h)
 	return e
 }
 
 func TestEcho_RecordsOnce(t *testing.T) {
 	t.Parallel()
-	spy := &spyRecorder{}
+	spy := &spyRecorder{callPrepare: true}
 	e := newEcho(spy, func(c echov4.Context) error {
 		event.Current(c.Request().Context()).Action = "user.login"
 		return c.String(http.StatusOK, "ok")
@@ -67,7 +42,7 @@ func TestEcho_RecordsOnce(t *testing.T) {
 // success for a request that wrote nothing.
 func TestEcho_HandlerReturnsWithoutWriting(t *testing.T) {
 	t.Parallel()
-	spy := &spyRecorder{}
+	spy := &spyRecorder{callPrepare: true}
 	e := newEcho(spy, func(c echov4.Context) error {
 		event.Current(c.Request().Context()).Action = "user.login"
 		return nil // no write
@@ -84,7 +59,7 @@ func TestEcho_HandlerReturnsWithoutWriting(t *testing.T) {
 
 func TestEcho_DeniedStatus(t *testing.T) {
 	t.Parallel()
-	spy := &spyRecorder{}
+	spy := &spyRecorder{callPrepare: true}
 	e := newEcho(spy, func(c echov4.Context) error {
 		event.Current(c.Request().Context()).Action = "user.login"
 		return c.String(http.StatusUnauthorized, "nope")
@@ -98,7 +73,7 @@ func TestEcho_DeniedStatus(t *testing.T) {
 
 func TestEcho_UnnamedEventNotRecorded(t *testing.T) {
 	t.Parallel()
-	spy := &spyRecorder{}
+	spy := &spyRecorder{callPrepare: true}
 	e := newEcho(spy, func(c echov4.Context) error { return c.String(http.StatusOK, "ok") })
 
 	w := httptest.NewRecorder()

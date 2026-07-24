@@ -1,7 +1,6 @@
-package gin_test
+package adapters_test
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -10,32 +9,9 @@ import (
 	gingonic "github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
-	everginc "github.com/everscribe/sdk-go/adapters/http/gin"
 	"github.com/everscribe/sdk-go/pkg/event"
+	"github.com/everscribe/sdk-go/pkg/http/adapters"
 )
-
-type spyRecorder struct {
-	mu  sync.Mutex
-	got []event.Event
-}
-
-func (s *spyRecorder) Record(ctx context.Context, e *event.Event) error {
-	event.PrepareEvent(ctx, e)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.got = append(s.got, *e)
-	return nil
-}
-
-func (s *spyRecorder) events() []event.Event {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]event.Event(nil), s.got...)
-}
-
-type nopLogger struct{}
-
-func (nopLogger) Error(string, ...any) {}
 
 // setModeOnce guards gingonic.SetMode, which writes unsynchronized
 // package-level globals. Tests run with t.Parallel(), so calling it once
@@ -46,14 +22,14 @@ var setModeOnce sync.Once
 func newRouter(spy *spyRecorder, h gingonic.HandlerFunc) *gingonic.Engine {
 	setModeOnce.Do(func() { gingonic.SetMode(gingonic.TestMode) })
 	r := gingonic.New()
-	r.Use(everginc.New(everginc.Options{Recorder: spy, Logger: nopLogger{}}))
+	r.Use(adapters.GinEventMiddleware(adapters.Options{Recorder: spy, Logger: nopLogger{}}))
 	r.GET("/", h)
 	return r
 }
 
 func TestGin_RecordsOnce(t *testing.T) {
 	t.Parallel()
-	spy := &spyRecorder{}
+	spy := &spyRecorder{callPrepare: true}
 	r := newRouter(spy, func(c *gingonic.Context) {
 		event.Current(c.Request.Context()).Action = "user.login"
 		c.String(http.StatusOK, "ok")
@@ -74,7 +50,7 @@ func TestGin_RecordsOnce(t *testing.T) {
 // successful 200 for a request that produced no response at all.
 func TestGin_AbortWithNoWrite(t *testing.T) {
 	t.Parallel()
-	spy := &spyRecorder{}
+	spy := &spyRecorder{callPrepare: true}
 	r := newRouter(spy, func(c *gingonic.Context) {
 		event.Current(c.Request.Context()).Action = "user.login"
 		c.Abort() // no write
@@ -92,7 +68,7 @@ func TestGin_AbortWithNoWrite(t *testing.T) {
 
 func TestGin_DeniedStatus(t *testing.T) {
 	t.Parallel()
-	spy := &spyRecorder{}
+	spy := &spyRecorder{callPrepare: true}
 	r := newRouter(spy, func(c *gingonic.Context) {
 		event.Current(c.Request.Context()).Action = "user.login"
 		c.String(http.StatusForbidden, "nope")
@@ -106,7 +82,7 @@ func TestGin_DeniedStatus(t *testing.T) {
 
 func TestGin_UnnamedEventNotRecorded(t *testing.T) {
 	t.Parallel()
-	spy := &spyRecorder{}
+	spy := &spyRecorder{callPrepare: true}
 	r := newRouter(spy, func(c *gingonic.Context) { c.String(http.StatusOK, "ok") })
 
 	w := httptest.NewRecorder()

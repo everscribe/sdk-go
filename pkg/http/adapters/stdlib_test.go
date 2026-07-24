@@ -1,4 +1,4 @@
-package stdlib_test
+package adapters_test
 
 import (
 	"bufio"
@@ -15,49 +15,17 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/everscribe/sdk-go/adapters/http/stdlib"
 	"github.com/everscribe/sdk-go/pkg/event"
+	"github.com/everscribe/sdk-go/pkg/http/adapters"
 	"github.com/everscribe/sdk-go/pkg/recorder"
 )
-
-// spyRecorder captures what the lifecycle submits.
-//
-// callPrepare models the difference that drives the whole dedupe design: the
-// stock recorders call event.PrepareEvent (HTTPRecorder at http.go:105,
-// BufferedRecorder at buffered.go:180), but a custom Recorder is free not to,
-// which is the case the idempotency key exists to cover.
-type spyRecorder struct {
-	mu          sync.Mutex
-	got         []event.Event
-	callPrepare bool
-}
-
-func (s *spyRecorder) Record(ctx context.Context, e *event.Event) error {
-	if s.callPrepare {
-		event.PrepareEvent(ctx, e)
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.got = append(s.got, *e) // by value: proves the flag is not on Event
-	return nil
-}
-
-func (s *spyRecorder) events() []event.Event {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]event.Event(nil), s.got...)
-}
-
-type nopLogger struct{}
-
-func (nopLogger) Error(string, ...any) {}
 
 // serve mounts h behind the middleware and returns a test server plus a
 // channel closed once the middleware (including its deferred end) has fully
 // returned, so assertions do not race the auto-record.
 func serve(t *testing.T, rec event.Recorder, h http.HandlerFunc) (*httptest.Server, <-chan struct{}) {
 	t.Helper()
-	mw := stdlib.New(stdlib.Options{Recorder: rec, Logger: nopLogger{}})
+	mw := adapters.StdlibEventMiddleware(adapters.Options{Recorder: rec, Logger: nopLogger{}})
 	finished := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer close(finished)
@@ -386,7 +354,7 @@ func TestFlagUnderContention(t *testing.T) {
 	require.Empty(t, spy.events(), "every PrepareEvent marked it; end must skip")
 }
 
-// TestFlush_SupportsServerSentEvents is the I4 falsification. responseWriter
+// TestFlush_SupportsServerSentEvents is the I4 falsification. stdlibResponseWriter
 // embeds http.ResponseWriter with no Unwrap, Flush, or Hijack, so
 // http.ResponseController and direct http.Flusher type assertions both stop
 // working behind this middleware, breaking SSE and any other handler that
@@ -441,7 +409,7 @@ func TestFlush_SupportsServerSentEvents(t *testing.T) {
 // TestHijack_TypeAssertionSucceeds is the I4 falsification for websocket
 // upgrades. A handler behind this middleware type-asserts
 // w.(http.Hijacker) exactly as it would with no middleware mounted;
-// responseWriter must implement Hijack for that to succeed.
+// stdlibResponseWriter must implement Hijack for that to succeed.
 func TestHijack_TypeAssertionSucceeds(t *testing.T) {
 	t.Parallel()
 	spy := &spyRecorder{callPrepare: true}
@@ -467,5 +435,5 @@ func TestHijack_TypeAssertionSucceeds(t *testing.T) {
 	<-finished
 
 	require.True(t, <-hijackerOK,
-		"responseWriter must implement http.Hijacker for the type assertion to succeed")
+		"stdlibResponseWriter must implement http.Hijacker for the type assertion to succeed")
 }
