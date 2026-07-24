@@ -2,6 +2,7 @@ package event
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -75,11 +76,14 @@ type stubCapture struct {
 func (s stubCapture) Outcome() (Result, bool) { return s.result, s.ok }
 
 type stubRecorder struct {
+	mu  sync.Mutex
 	got []Event
 }
 
 func (s *stubRecorder) Record(_ context.Context, e *Event) error {
-	s.got = append(s.got, *e) // by value: fails to compile if the flag moves onto Event
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.got = append(s.got, *e) // by value: go vet copylocks fails if the flag moves onto Event
 	return nil
 }
 
@@ -122,6 +126,69 @@ func TestEnd_RecordsOnceAndAppliesOutcome(t *testing.T) {
 	require.Len(t, rec.got, 1)
 	require.Equal(t, "ok", rec.got[0].Result.Status)
 	require.Equal(t, 200, rec.got[0].Result.Code)
+}
+
+// TestEnd_RacesWithPrepareEvent exercises the actual scenario the recorded
+// flag's atomic.Bool/CompareAndSwap pair exists for: two library code paths
+// writing the flag concurrently, not a single caller misusing end(). One
+// goroutine calls the automatic path (end); a second goroutine calls the
+// manual path's claim step (PrepareEvent). A third goroutine calls end again
+// concurrently too, because racing a single end() against a single
+// PrepareEvent call cannot, by construction, distinguish a correct
+// CompareAndSwap from a naive load-then-store: PrepareEvent never performs a
+// check-then-act on the flag (it unconditionally Stores when it owns the
+// current event), so there is only ever one checker in that pairing and no
+// checker can race itself. The regression this test must catch, two
+// concurrent end() calls both winning, requires two checkers.
+//
+// Result is preset below so every goroutine's applyOutcome call is a pure
+// read (the "already set" branch), not a write, keeping the race isolated to
+// the recorded flag itself rather than tripping an unrelated, already-known
+// data race on Event.Result when two callers populate the same outcome
+// concurrently.
+//
+// Invariant: end() must never record more than once, no matter how many
+// goroutines race the flag. It is not always exactly one, because when
+// PrepareEvent's claim lands before either end() call's CompareAndSwap, both
+// end() calls correctly back off and zero records land here; per the design,
+// the manual caller who won that claim is the one responsible for recording,
+// through a separate call this test does not simulate. Across many
+// iterations the loop also confirms end() does win and record at least once,
+// so the assertion is not vacuously true.
+func TestEnd_RacesWithPrepareEvent(t *testing.T) {
+	t.Parallel()
+
+	const iterations = 300
+	wonAtLeastOnce := false
+	for i := 0; i < iterations; i++ {
+		rec := &stubRecorder{}
+		ctx, end := Begin(t.Context(), &Event{}, stubCapture{Result{Status: "ok", Code: 200}, true}, rec, stubLogger{})
+		cur := Current(ctx)
+		cur.Action = "user.login"
+		cur.Result = Result{Status: "ok", Code: 200} // preset: see comment above
+
+		var wg sync.WaitGroup
+		wg.Add(3)
+		go func() {
+			defer wg.Done()
+			end()
+		}()
+		go func() {
+			defer wg.Done()
+			end()
+		}()
+		go func() {
+			defer wg.Done()
+			PrepareEvent(ctx, Current(ctx))
+		}()
+		wg.Wait()
+
+		require.LessOrEqualf(t, len(rec.got), 1, "iteration %d: end must never record more than once", i)
+		if len(rec.got) == 1 {
+			wonAtLeastOnce = true
+		}
+	}
+	require.True(t, wonAtLeastOnce, "end must win the race and record at least once across many iterations")
 }
 
 func TestEnd_NoOutcomeYieldsDiagnostic(t *testing.T) {

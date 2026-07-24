@@ -83,7 +83,18 @@ func Begin(ctx context.Context, tmpl *Event, capture OutcomeCapture, rec Recorde
 // event the adapter will auto-record. Handlers recording several events per
 // request use FromContext instead, which returns a clone with a fresh ID.
 //
-// Mutate the returned event from the request goroutine only.
+// The concurrency contract covers all access to the returned event, not just
+// field assignment: only the request goroutine may touch it, including
+// handing it to a recorder. Record itself mutates the event, not just reads
+// it, so this is not a theoretical concern: PrepareEvent writes ID,
+// OccurredAt, and Result, and the HTTP recorder then writes IdempotencyKey
+// on top of that. Record also marshals every field to build the request
+// body. A second goroutine calling Record on this same event, even read-only
+// as far as its own code is concerned, races both of those writes and the
+// marshaling, regardless of the recorded flag; the flag deduplicates
+// submissions, it does not make the event itself safe for concurrent Record
+// calls. Pass the result of FromContext, not Current, to any code that
+// records outside the request goroutine.
 func Current(ctx context.Context) *Event {
 	st, _ := ctx.Value(requestStateKey{}).(*requestState)
 	if st == nil {
