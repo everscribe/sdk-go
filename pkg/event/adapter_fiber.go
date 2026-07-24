@@ -21,12 +21,17 @@ import (
 // separator. RemoteAddr().String() always includes the port (and brackets
 // IPv6 hosts), so it is unambiguous.
 //
-// v3 only. In v3, fiber.Ctx implements context.Context via Context() and
-// SetContext, so ActorResolver takes it directly. v2 used c.UserContext()
-// and c.SetUserContext, which v3 renamed (and repurposed Context() /
-// SetContext for the fasthttp-backed context.Context, moving the old
-// fasthttp accessor to RequestCtx()), so a v2 adapter would need its own
-// module.
+// v3 only, for now. In v3, fiber.Ctx implements context.Context via
+// Context() and SetContext, so ActorResolver takes it directly. v2 used
+// c.UserContext() and c.SetUserContext, which v3 renamed (and repurposed
+// Context() / SetContext for the fasthttp-backed context.Context, moving
+// the old fasthttp accessor to RequestCtx()).
+//
+// A FiberV2Middleware could live in this same package if wanted:
+// fiber/v2 and fiber/v3 are distinct module paths under semantic import
+// versioning, so one package may import both, and minimal version
+// selection resolves each path independently. The cost is fiber v2's
+// dependency tree joining the module graph.
 //
 // It returns fiber middleware that installs a per-request event and
 // records it once after the handler chain completes. Handlers reach it

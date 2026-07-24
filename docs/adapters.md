@@ -12,7 +12,7 @@ rest of the event lifecycle.
 | `pkg/event` (stdlib) | `net/http` (stdlib), Go 1.25.0. Also covers chi and gorilla/mux, which are both plain `func(http.Handler) http.Handler` | `event.Middleware(event.Options{...}) func(http.Handler) http.Handler` | A wrapping `stdlibResponseWriter`'s own `wroteHeader` flag |
 | `pkg/event` (gin) | `github.com/gin-gonic/gin` v1.10.0 | `event.GinMiddleware(event.Options{...}) gin.HandlerFunc` | `c.Writer.Written()` and `c.Writer.Status()` |
 | `pkg/event` (echo) | `github.com/labstack/echo/v4` v4.12.0 | `event.EchoV4Middleware(event.Options{...}) echo.MiddlewareFunc` | `c.Response().Committed` and `c.Response().Status` |
-| `pkg/event` (fiber) | `github.com/gofiber/fiber/v3` v3.4.0 (v3 only; see below) | `event.FiberV3Middleware(event.Options{...}) fiber.Handler` | An explicit `completed` flag set after `c.Next()` returns, plus `c.Response().StatusCode()` |
+| `pkg/event` (fiber) | `github.com/gofiber/fiber/v3` v3.4.0 (v3 today; v2 could be added, see below) | `event.FiberV3Middleware(event.Options{...}) fiber.Handler` | An explicit `completed` flag set after `c.Next()` returns, plus `c.Response().StatusCode()` |
 | `pkg/event` (gRPC) | `google.golang.org/grpc` v1.68.0 | `event.UnaryInterceptor(event.Options{...})` / `event.StreamInterceptor(event.Options{...})` | The error returned by the handler, mapped through the canonical gRPC-to-HTTP status table |
 
 All six mount points share one `event.Options`: `Resolve`
@@ -27,12 +27,26 @@ carry one, so they are `EchoV4Middleware` and `FiberV3Middleware`.
 `UnaryInterceptor`, and `StreamInterceptor`. `Middleware` takes the unqualified
 name because `net/http` is the default case.
 
-The point is additive support: when echo v5 ships, `EchoV5Middleware` can land
+The point is additive support: when echo v5 ships, `EchoV5Middleware` lands
 alongside `EchoV4Middleware` rather than replacing it, so upgrading the SDK does
-not force a framework upgrade. Note the limit, though. All six adapters share
-one package and therefore one dependency set, and a single Go package can import
-only one major of a given module. So the two cannot actually coexist without
-splitting the package again. This is why fiber is v3 only today.
+not force a framework upgrade.
+
+This works even though all six adapters share one package. Under semantic import
+versioning `github.com/gofiber/fiber/v2` and `github.com/gofiber/fiber/v3` are
+different module paths, so they are different modules and different packages, and
+one Go package may import both:
+
+```go
+import (
+    fiberv2 "github.com/gofiber/fiber/v2"
+    fiberv3 "github.com/gofiber/fiber/v3"
+)
+```
+
+Minimal version selection picks one version per module path, not one major per
+project, so the two do not compete. Fiber is v3 only today because no v2 adapter
+has been written, not because one cannot be. Adding `FiberV2Middleware` is
+additive, at the cost of fiber v2's dependency tree joining the module graph.
 
 ## Behavioral divergences
 
@@ -98,11 +112,17 @@ inherit the RPC method name - it comes back unnamed, exactly like the HTTP
 adapters, and is dropped by the empty-`Action` guard every stock recorder
 applies unless the handler names it itself.
 
-### fiber's v3-only constraint
+### fiber v2 is absent, not excluded
 
-The fiber adapter targets `gofiber/fiber/v3` only. In v3, `fiber.Ctx`
+`FiberV3Middleware` targets `gofiber/fiber/v3`. In v3, `fiber.Ctx`
 implements `context.Context` directly via `Context()` / `SetContext`,
 which is what lets `ActorResolver` take it as-is. v2 used
-`c.UserContext()` / `c.SetUserContext` for the same purpose and repurposed
-`Context()` for the fasthttp-backed context, so a v2 adapter would need
-its own package rather than a version bump of this one.
+`c.UserContext()` / `c.SetUserContext` for the same purpose and
+repurposed `Context()` for the fasthttp-backed context, so a v2 adapter
+needs its own function body rather than a version bump of this one.
+
+It does not need its own package. `fiber/v2` and `fiber/v3` are distinct
+module paths, so `FiberV2Middleware` can sit beside `FiberV3Middleware`
+here whenever someone wants it, and both can be mounted in the same
+program. The cost is that fiber v2's dependency tree joins the module
+graph for every consumer, which is why it is not there speculatively.
