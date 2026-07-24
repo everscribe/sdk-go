@@ -20,12 +20,12 @@ for [embeddable components](https://github.com/everscribe/components).
 
 </div>
 
-## 📖 Documentation
+## 📖 Setup Documentation
 
-| Path | What it is | Pick it when |
+| Setup with | What it is | Pick it when |
 |---|---|---|
 | [Hosted AI agent](https://everscribe.io/docs/quickstart/hosted-ui) | You install our GitHub App. Our server-side agent walks your repo, proposes a plan, and opens a PR you review. | You want zero hand-wiring and are fine granting the GitHub App read access. |
-| [BYOK Claude Code skill](https://everscribe.io/docs/quickstart/skill) | A skill runs inside *your* Claude Code session against *your* Anthropic key. Same behavior, source never leaves your machine. | You want AI-driven setup without connecting a GitHub App. |
+| [BYOK Claude Code skill](https://everscribe.io/docs/quickstart/skill) | Install the [`es` CLI](https://github.com/everscribe/cli) and run `es skills download setup`. That drops a skill into your Claude Code skills directory, and your own local Claude agent does the setup. Same behavior as the hosted agent, but against *your* Anthropic key, and your source never leaves your machine. | You do not want to grant Everscribe read access to your repo, or you want a free option and already have Claude Code. |
 | [Wire it up yourself](https://everscribe.io/docs/sdks/go-install) | Install the SDK and add the calls by hand. | You want full control, or you are instrumenting a small surface. |
 
 ## Supported frameworks
