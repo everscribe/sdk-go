@@ -132,7 +132,7 @@ func TestBegin_StampsKeyOnCurrentNotTemplate(t *testing.T) {
 	require.Equal(t, cur.ID, cur.IdempotencyKey)
 	require.Empty(t, tmpl.IdempotencyKey, "the template must stay unstamped")
 
-	clone := FromContext(ctx)
+	clone := NewFromContext(ctx)
 	require.Empty(t, clone.IdempotencyKey, "clones must not inherit the key")
 	require.NotEqual(t, cur.ID, clone.ID)
 }
@@ -252,7 +252,7 @@ func TestPrepareEvent_DoesNotMarkClones(t *testing.T) {
 	ctx, end := Begin(t.Context(), &Event{}, stubCapture{Result{Status: "ok"}, true}, rec, stubLogger{})
 	Current(ctx).Action = "user.login"
 
-	clone := FromContext(ctx)
+	clone := NewFromContext(ctx)
 	clone.Action = "user.logout"
 	PrepareEvent(ctx, clone) // a different event: must not claim the slot
 	end()

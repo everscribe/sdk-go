@@ -36,7 +36,7 @@ const recordTimeout = 15 * time.Second
 // context.
 //
 // The recorded flag lives here rather than on Event deliberately:
-// sync/atomic.Bool embeds noCopy, and Event is copied by value in FromContext
+// sync/atomic.Bool embeds noCopy, and Event is copied by value in NewFromContext
 // (clone := *tmpl), in BufferedRecorder.Record (b.events <- *e), and in
 // RecordBatch's slice elements, so a flag on Event would fail go vet's
 // copylocks check.
@@ -61,7 +61,7 @@ type requestStateKey struct{}
 // collides on the id primary key instead. Caller-supplied keys still win by
 // ordering, since the handler runs after Begin and simply overwrites.
 //
-// Clones from FromContext deliberately do not inherit the key: they come from
+// Clones from NewFromContext deliberately do not inherit the key: they come from
 // the template, which is left unstamped. Distinct IDs sharing one key would be
 // silently deduped against each other.
 func Begin(ctx context.Context, tmpl *Event, capture OutcomeCapture, rec Recorder, log Logger) (context.Context, func()) {
@@ -70,7 +70,7 @@ func Begin(ctx context.Context, tmpl *Event, capture OutcomeCapture, rec Recorde
 	}
 	ctx = context.WithValue(ctx, eventTemplateKey{}, tmpl)
 
-	current := FromContext(ctx) // a clone, so the template stays unstamped
+	current := NewFromContext(ctx) // a clone, so the template stays unstamped
 	current.IdempotencyKey = current.ID
 
 	st := &requestState{current: current, capture: capture, recorder: rec, logger: log}
@@ -81,10 +81,10 @@ func Begin(ctx context.Context, tmpl *Event, capture OutcomeCapture, rec Recorde
 
 // Current returns the request-scoped mutable event installed by Begin: the
 // event the adapter will auto-record. Handlers recording several events per
-// request use FromContext instead, which returns a clone with a fresh ID.
+// request use NewFromContext instead, which returns a clone with a fresh ID.
 // If no adapter installed one (no Begin has run on this context), Current
 // returns a throwaway *Event{} - the same "no template present" fallback
-// FromContext documents, so calling it outside a lifecycle is harmless but
+// NewFromContext documents, so calling it outside a lifecycle is harmless but
 // its return value is never recorded.
 //
 // The concurrency contract covers all access to the returned event, not just
@@ -97,7 +97,7 @@ func Begin(ctx context.Context, tmpl *Event, capture OutcomeCapture, rec Recorde
 // as far as its own code is concerned, races both of those writes and the
 // marshaling, regardless of the recorded flag; the flag deduplicates
 // submissions, it does not make the event itself safe for concurrent Record
-// calls. Pass the result of FromContext, not Current, to any code that
+// calls. Pass the result of NewFromContext, not Current, to any code that
 // records outside the request goroutine.
 func Current(ctx context.Context) *Event {
 	st, _ := ctx.Value(requestStateKey{}).(*requestState)

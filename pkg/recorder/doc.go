@@ -36,14 +36,14 @@
 // enable WithAutoIdempotencyKey() - it copies Event.ID into IdempotencyKey
 // at send time when the key is empty. Caller-supplied keys win.
 //
-// # HTTP handlers: the defer pattern
+// # HTTP handlers: let the adapter record
 //
-// For HTTP handlers, the recommended idiom is to defer Record at the
-// top of the handler, then enrich the Event as the handler runs:
+// Mount an adapter from pkg/event and the handler never calls Record at
+// all. Reach the request-scoped event with event.Current, enrich it as the
+// handler runs, and the adapter records it once the handler returns:
 //
 //	func (s *Server) handleLockUser(w http.ResponseWriter, r *http.Request) {
-//	    e := event.FromContext(r.Context())
-//	    defer s.recorder.Record(r.Context(), e)
+//	    e := event.Current(r.Context())
 //
 //	    userID := r.PathValue("id")
 //	    e.Action = "user.lock"
@@ -57,6 +57,10 @@
 //	    }
 //	    http.Redirect(w, r, "/users/"+userID, http.StatusSeeOther)
 //	}
+//
+// Use event.NewFromContext instead of event.Current when a handler emits
+// several events: it returns an independent clone with a fresh ID, which
+// you record yourself. Current returns the one event the adapter owns.
 //
 // Result is auto-populated from the adapter's OutcomeCapture when it is
 // unset. Adapters own the record call, so handlers usually do not call
@@ -137,7 +141,7 @@
 //
 // # Multiple events per handler
 //
-// Handlers that record multiple events per request call FromContext
+// Handlers that record multiple events per request call NewFromContext
 // once per event (each call returns a fresh clone of the template)
 // and Record explicitly for each. The defer pattern is for the common
 // single-event case.

@@ -38,7 +38,7 @@ func UnaryInterceptor(opts Options) googlegrpc.UnaryServerInterceptor {
 		}
 		ctx, end := Begin(ctx, tmpl, oc, opts.Recorder, logger)
 		// Stamped on the request-scoped event, not the template: a template
-		// Action would flow into every FromContext clone the handler makes, so
+		// Action would flow into every NewFromContext clone the handler makes, so
 		// a secondary event the handler never named would inherit the RPC
 		// method name instead of being dropped by the empty-Action guard every
 		// stock recorder applies.
@@ -75,7 +75,7 @@ func StreamInterceptor(opts Options) googlegrpc.StreamServerInterceptor {
 		}
 		ctx, end := Begin(parent, tmpl, oc, opts.Recorder, logger)
 		// See the matching comment in UnaryInterceptor: stamped on the
-		// request-scoped event, not the template, so FromContext clones stay
+		// request-scoped event, not the template, so NewFromContext clones stay
 		// unnamed.
 		Current(ctx).Action = info.FullMethod
 		defer end()

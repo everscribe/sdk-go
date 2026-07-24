@@ -106,7 +106,7 @@ arbitrary HTTP routes are not, so recording every call by default is the
 more useful default for this protocol.
 
 The stamp is applied to `event.Current(ctx)`, the request-scoped event,
-not to the template `Begin` installs. `event.FromContext` clones the
+not to the template `Begin` installs. `event.NewFromContext` clones the
 template, so a clone a handler makes for a secondary event does **not**
 inherit the RPC method name - it comes back unnamed, exactly like the HTTP
 adapters, and is dropped by the empty-`Action` guard every stock recorder

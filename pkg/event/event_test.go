@@ -16,15 +16,15 @@ func TestNewEvent_PopulatesDefaults(t *testing.T) {
 	require.Equal(t, "user.login", e.Action)
 }
 
-func TestFromContext_NoTemplate_ReturnsMinimalEvent(t *testing.T) {
+func TestNewFromContext_NoTemplate_ReturnsMinimalEvent(t *testing.T) {
 	t.Parallel()
-	e := FromContext(context.Background())
+	e := NewFromContext(context.Background())
 	require.NotEmpty(t, e.ID)
 	require.False(t, e.OccurredAt.IsZero())
 	require.Empty(t, e.Action)
 }
 
-func TestFromContext_WithTemplate_CopiesActorAndOrigin(t *testing.T) {
+func TestNewFromContext_WithTemplate_CopiesActorAndOrigin(t *testing.T) {
 	t.Parallel()
 	tmpl := &Event{
 		Actor:  Actor{Type: "user", ID: "u1", DisplayName: "alice", Email: "a@b"},
@@ -32,20 +32,20 @@ func TestFromContext_WithTemplate_CopiesActorAndOrigin(t *testing.T) {
 	}
 	ctx := context.WithValue(context.Background(), eventTemplateKey{}, tmpl)
 
-	e := FromContext(ctx)
+	e := NewFromContext(ctx)
 	require.Equal(t, tmpl.Actor, e.Actor)
 	require.Equal(t, tmpl.Origin, e.Origin)
 	require.NotEmpty(t, e.ID)
 	require.False(t, e.OccurredAt.IsZero())
 }
 
-func TestFromContext_ReturnsIndependentClones(t *testing.T) {
+func TestNewFromContext_ReturnsIndependentClones(t *testing.T) {
 	t.Parallel()
 	tmpl := &Event{Actor: Actor{Type: "user", ID: "u1"}}
 	ctx := context.WithValue(context.Background(), eventTemplateKey{}, tmpl)
 
-	e1 := FromContext(ctx)
-	e2 := FromContext(ctx)
+	e1 := NewFromContext(ctx)
+	e2 := NewFromContext(ctx)
 
 	require.NotEqual(t, e1.ID, e2.ID, "each call should produce a unique ID")
 
@@ -56,7 +56,7 @@ func TestFromContext_ReturnsIndependentClones(t *testing.T) {
 	require.Nil(t, tmpl.Metadata, "template should be untouched")
 }
 
-func TestFromContext_MetadataIsolation(t *testing.T) {
+func TestNewFromContext_MetadataIsolation(t *testing.T) {
 	t.Parallel()
 	tmpl := &Event{
 		Actor:    Actor{Type: "user"},
@@ -64,8 +64,8 @@ func TestFromContext_MetadataIsolation(t *testing.T) {
 	}
 	ctx := context.WithValue(context.Background(), eventTemplateKey{}, tmpl)
 
-	e := FromContext(ctx)
-	// FromContext nils metadata so each event owns its own map.
+	e := NewFromContext(ctx)
+	// NewFromContext nils metadata so each event owns its own map.
 	require.Nil(t, e.Metadata)
 	e.WithField("own", "value")
 	require.NotContains(t, e.Metadata, "shared")

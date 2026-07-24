@@ -5,7 +5,7 @@
 // knowing which part you are looking at:
 //
 //   - The record. Event and its parts (Actor, Target, Origin, Result, Change),
-//     plus the constructors New and FromContext and the enrichment helpers
+//     plus the constructors New and NewFromContext and the enrichment helpers
 //     WithField, WithFields, Diff, and RawDiff.
 //   - The lifecycle. Begin and Current, which let an adapter install a
 //     per-request event, hand it to the handler, and record it once when the
@@ -69,8 +69,8 @@
 //	e := event.New("subscription.renewed")
 //	_ = rec.Record(ctx, e)
 //
-// Inside a handler, use FromContext for extra events rather than Current.
-// Current returns the one event the adapter will record; FromContext returns
+// Inside a handler, use NewFromContext for extra events rather than Current.
+// Current returns the one event the adapter will record; NewFromContext returns
 // an independent clone with a fresh ID. Recording a clone does not suppress
 // the adapter's own record, and the adapter's record does not suppress yours.
 //
@@ -85,7 +85,7 @@
 // all access, not just field assignment: passing it to a recorder counts,
 // because recording mutates it (filling ID, OccurredAt, and Result) and
 // marshals every field. Two goroutines recording the same event race
-// regardless of the deduplication above. Hand FromContext clones, not Current,
+// regardless of the deduplication above. Hand NewFromContext clones, not Current,
 // to anything that records outside the request goroutine.
 //
 // # Adapters do not all behave identically

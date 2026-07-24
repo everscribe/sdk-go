@@ -129,7 +129,7 @@ func TestDedupe_CustomRecorderSkippingPrepare_BothCarrySameKey(t *testing.T) {
 }
 
 // TestClones_StayKeyless is spec constraint 2. Begin stamps the request-scoped
-// event, never the template, so FromContext clones inherit no key. Distinct IDs
+// event, never the template, so NewFromContext clones inherit no key. Distinct IDs
 // sharing one key would be silently deduped against each other.
 func TestClones_StayKeyless(t *testing.T) {
 	t.Parallel()
@@ -137,8 +137,8 @@ func TestClones_StayKeyless(t *testing.T) {
 	var cloneA, cloneB *event.Event
 	srv, finished := serve(t, spy, func(w http.ResponseWriter, r *http.Request) {
 		event.Current(r.Context()).Action = "user.login"
-		cloneA = event.FromContext(r.Context())
-		cloneB = event.FromContext(r.Context())
+		cloneA = event.NewFromContext(r.Context())
+		cloneB = event.NewFromContext(r.Context())
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -230,7 +230,7 @@ func TestClientDisconnect_StillRecords(t *testing.T) {
 
 // TestMidHandlerRecord_DoesNotStampNoResponseWritten is the falsification for
 // C1. PrepareEvent used to run applyOutcome's ok == false fallback
-// unconditionally, so a FromContext clone recorded before the response is
+// unconditionally, so a NewFromContext clone recorded before the response is
 // written - the pattern pkg/recorder/doc.go recommends for multiple events
 // per handler - got a false "no response written" error baked into an
 // immutable audit record, even though the handler simply had not written a
@@ -242,7 +242,7 @@ func TestMidHandlerRecord_DoesNotStampNoResponseWritten(t *testing.T) {
 	srv, finished := serve(t, spy, func(w http.ResponseWriter, r *http.Request) {
 		event.Current(r.Context()).Action = "user.login"
 
-		mid := event.FromContext(r.Context())
+		mid := event.NewFromContext(r.Context())
 		mid.Action = "user.login.attempt"
 		require.NoError(t, spy.Record(r.Context(), mid)) // recorded before any write
 

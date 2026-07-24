@@ -87,7 +87,7 @@ func TestUnary_OriginFromMetadataAndPeer(t *testing.T) {
 
 // TestUnary_CloneInsideHandlerStaysUnnamed is the I5 falsification.
 // UnaryInterceptor used to set Action: info.FullMethod on the template
-// passed to Begin, so every event.FromContext clone made inside the
+// passed to Begin, so every event.NewFromContext clone made inside the
 // handler silently inherited the RPC method name instead of coming back
 // unnamed. A secondary event the handler never explicitly named would then
 // get auto-named after the RPC and recorded, rather than being dropped by
@@ -99,13 +99,13 @@ func TestUnary_CloneInsideHandlerStaysUnnamed(t *testing.T) {
 	spy := &spyRecorder{}
 	var clone *event.Event
 	invoke(t, spy, func(ctx context.Context, req any) (any, error) {
-		clone = event.FromContext(ctx)
+		clone = event.NewFromContext(ctx)
 		return nil, nil
 	})
 
 	require.NotNil(t, clone)
 	require.Empty(t, clone.Action,
-		"a FromContext clone must not inherit the RPC method name from the template")
+		"a NewFromContext clone must not inherit the RPC method name from the template")
 
 	got := spy.events()
 	require.Len(t, got, 1, "only the primary event auto-records")

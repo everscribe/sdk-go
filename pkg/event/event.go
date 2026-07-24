@@ -10,7 +10,7 @@ import (
 )
 
 // Event is the canonical audit record. Construct via New (non-HTTP)
-// or FromContext (HTTP, after an adapter's Begin has run), populate the
+// or NewFromContext (HTTP, after an adapter's Begin has run), populate the
 // handler-specific fields (Action, Target, Metadata, optionally Result),
 // and pass to Recorder.Record.
 type Event struct {
@@ -54,7 +54,7 @@ type Actor struct {
 type ActorResolver func(ctx context.Context) Actor
 
 // eventTemplateKey is the context key an adapter's Begin call uses to
-// install the per-request Event template that FromContext reads.
+// install the per-request Event template that NewFromContext reads.
 type eventTemplateKey struct{}
 
 // Target identifies what the event was acting on. Empty means no target.
@@ -72,7 +72,7 @@ type Origin struct {
 
 // New returns a new Event with ID, OccurredAt, and Action populated.
 // Use for non-HTTP callers (background jobs, cron, CLI). HTTP handlers
-// should prefer FromContext, which additionally populates Origin and
+// should prefer NewFromContext, which additionally populates Origin and
 // Actor from the request.
 func New(action string) *Event {
 	return &Event{
@@ -82,15 +82,15 @@ func New(action string) *Event {
 	}
 }
 
-// FromContext returns a fresh Event pre-populated from the request-scoped
+// NewFromContext returns a fresh Event pre-populated from the request-scoped
 // template installed by an adapter's Begin call. If no template is present
 // (no adapter mounted, or called outside the request path), returns a
 // minimal Event equivalent to New("").
 //
 // Each call returns an independent Event - mutating the returned value
 // does not affect other events derived from the same context. Handlers
-// that record multiple events per request call FromContext once per event.
-func FromContext(ctx context.Context) *Event {
+// that record multiple events per request call NewFromContext once per event.
+func NewFromContext(ctx context.Context) *Event {
 	tmpl, ok := ctx.Value(eventTemplateKey{}).(*Event)
 	if !ok || tmpl == nil {
 		return &Event{
@@ -236,7 +236,7 @@ func PrepareEvent(ctx context.Context, e *Event) {
 //
 // The returned func is a no-op when e is not the request-scoped event
 // installed by Begin - pointer identity, not ID equality, since
-// FromContext clones are distinct events and must not be suppressed.
+// NewFromContext clones are distinct events and must not be suppressed.
 func PrepareEventFields(ctx context.Context, e *Event) (mark func()) {
 	if e.ID == "" {
 		e.ID = uuid.NewString()
