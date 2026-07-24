@@ -44,16 +44,12 @@ Your framework missing? [Open an issue](https://github.com/everscribe/sdk-go/iss
 
 ## Additional resources
 
-- [Runnable examples](https://github.com/everscribe/examples): end-to-end sample
-apps, front end through back end, for every Everscribe SDK.
+- [Runnable examples](https://github.com/everscribe/examples): full-stack runnable
+apps for every Everscribe SDK.
 
-- [AI-assisted setup demo](https://github.com/everscribe/ai-assisted-setup-demo): a
-sample repo for trying either AI setup path against something disposable. Run it
-before and after to see what the agent actually changed.
+- [AI-assisted setup demo](https://github.com/everscribe/ai-assisted-setup-demo): Sample repo for trying AI setup against something disposable.
 
-- [Everscribe CLI](https://github.com/everscribe/cli): `es` manages projects and
-API keys and lets you inspect, query, and live-tail audit events from the
-terminal. It is also how you download the BYOK setup skill.
+- [Everscribe CLI](https://github.com/everscribe/cli): CLI for downloading the Claude skill and managing projects, API keys, events and more.
 
 - [Embeddable components](https://github.com/everscribe/components): drop-in audit
-trail UI, mounted with tokens from this SDK's minter.
+trail UI for single and multi-tenant apps.
