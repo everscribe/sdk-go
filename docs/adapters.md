@@ -1,21 +1,21 @@
 # Adapter comparison
 
 Reference for choosing an adapter. Read once before mounting one; not a
-tutorial. Both adapter packages live in the root `github.com/everscribe/sdk-go`
-module, under `pkg/http/adapters` and `pkg/grpc/adapters`.
+tutorial. All six adapters live in the root `github.com/everscribe/sdk-go`
+module, in package `github.com/everscribe/sdk-go/pkg/event`, alongside the
+rest of the event lifecycle.
 
 ## At a glance
 
 | Adapter | Framework / version | Mount signature | Outcome derived from |
 |---|---|---|---|
-| `pkg/http/adapters` (stdlib) | `net/http` (stdlib), Go 1.25.0. Also covers chi and gorilla/mux, which are both plain `func(http.Handler) http.Handler` | `adapters.StdlibEventMiddleware(adapters.Options{...}) func(http.Handler) http.Handler` | A wrapping `stdlibResponseWriter`'s own `wroteHeader` flag |
-| `pkg/http/adapters` (gin) | `github.com/gin-gonic/gin` v1.10.0 | `adapters.GinEventMiddleware(adapters.Options{...}) gin.HandlerFunc` | `c.Writer.Written()` and `c.Writer.Status()` |
-| `pkg/http/adapters` (echo) | `github.com/labstack/echo/v4` v4.12.0 | `adapters.EchoEventMiddleware(adapters.Options{...}) echo.MiddlewareFunc` | `c.Response().Committed` and `c.Response().Status` |
-| `pkg/http/adapters` (fiber) | `github.com/gofiber/fiber/v3` v3.4.0 (v3 only; see below) | `adapters.FiberEventMiddleware(adapters.Options{...}) fiber.Handler` | An explicit `completed` flag set after `c.Next()` returns, plus `c.Response().StatusCode()` |
-| `pkg/grpc/adapters` | `google.golang.org/grpc` v1.68.0 | `adapters.EventUnaryInterceptor(adapters.Options{...})` / `adapters.EventStreamInterceptor(adapters.Options{...})` | The error returned by the handler, mapped through the canonical gRPC-to-HTTP status table |
+| `pkg/event` (stdlib) | `net/http` (stdlib), Go 1.25.0. Also covers chi and gorilla/mux, which are both plain `func(http.Handler) http.Handler` | `event.Middleware(event.Options{...}) func(http.Handler) http.Handler` | A wrapping `stdlibResponseWriter`'s own `wroteHeader` flag |
+| `pkg/event` (gin) | `github.com/gin-gonic/gin` v1.10.0 | `event.GinMiddleware(event.Options{...}) gin.HandlerFunc` | `c.Writer.Written()` and `c.Writer.Status()` |
+| `pkg/event` (echo) | `github.com/labstack/echo/v4` v4.12.0 | `event.EchoMiddleware(event.Options{...}) echo.MiddlewareFunc` | `c.Response().Committed` and `c.Response().Status` |
+| `pkg/event` (fiber) | `github.com/gofiber/fiber/v3` v3.4.0 (v3 only; see below) | `event.FiberMiddleware(event.Options{...}) fiber.Handler` | An explicit `completed` flag set after `c.Next()` returns, plus `c.Response().StatusCode()` |
+| `pkg/event` (gRPC) | `google.golang.org/grpc` v1.68.0 | `event.UnaryInterceptor(event.Options{...})` / `event.StreamInterceptor(event.Options{...})` | The error returned by the handler, mapped through the canonical gRPC-to-HTTP status table |
 
-All five mount points share one `Options` shape per package (`pkg/http/adapters.Options`
-and `pkg/grpc/adapters.Options` are structurally identical): `Resolve`
+All six mount points share one `event.Options`: `Resolve`
 (`event.ActorResolver`, nil yields an anonymous actor), `Recorder`
 (`event.Recorder`, nil installs the event but does not auto-record), and
 `Logger` (`event.Logger`, nil defaults to `slog.Default()`).
@@ -60,7 +60,7 @@ calling `w.WriteHeader` or `w.Write`) shows up as a recorded `error` under
 gin, echo, or stdlib, and as a recorded `ok` / 200 under fiber. This is a
 real, permanent limitation of building on fasthttp, not a bug in the
 adapter, and it is documented in the fiber adapter's doc comment
-(`pkg/http/adapters/fiber.go`).
+(`pkg/event/adapter_fiber.go`).
 
 ### gRPC records every RPC by default
 
@@ -69,13 +69,13 @@ event by setting `Action` (typically via `event.Current(ctx).Action = "..."`).
 An unnamed event is never recorded - a handler that early-returns before
 naming anything just does not emit garbage events.
 
-The gRPC adapter is different: both `EventUnaryInterceptor` and
-`EventStreamInterceptor` stamp `Action = info.FullMethod` on the
-request-scoped event immediately after `Begin` returns, so every RPC is
-recorded unless the handler deliberately clears `event.Current(ctx).Action`.
-This is intentional: gRPC method names are a closed, meaningful set in a
-way arbitrary HTTP routes are not, so recording every call by default is
-the more useful default for this protocol.
+The gRPC adapter is different: both `UnaryInterceptor` and
+`StreamInterceptor` stamp `Action = info.FullMethod` on the request-scoped
+event immediately after `Begin` returns, so every RPC is recorded unless
+the handler deliberately clears `event.Current(ctx).Action`. This is
+intentional: gRPC method names are a closed, meaningful set in a way
+arbitrary HTTP routes are not, so recording every call by default is the
+more useful default for this protocol.
 
 The stamp is applied to `event.Current(ctx)`, the request-scoped event,
 not to the template `Begin` installs. `event.FromContext` clones the
