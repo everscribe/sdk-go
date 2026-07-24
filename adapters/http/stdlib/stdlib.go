@@ -22,6 +22,20 @@ type Options struct {
 	Logger event.Logger
 }
 
+func (o Options) resolve() event.ActorResolver {
+	if o.Resolve == nil {
+		return func(context.Context) event.Actor { return event.Actor{Type: "anonymous"} }
+	}
+	return o.Resolve
+}
+
+func (o Options) logger() event.Logger {
+	if o.Logger == nil {
+		return slog.Default()
+	}
+	return o.Logger
+}
+
 // New returns middleware that installs a per-request event and records it
 // once after the handler completes. Handlers reach it with
 // event.Current(r.Context()) and name it by setting Action; an unnamed
@@ -30,14 +44,7 @@ type Options struct {
 // Mount it AFTER any auth middleware, since Resolve typically reads
 // session state. end is deferred, so it also runs while a panic unwinds.
 func New(opts Options) func(http.Handler) http.Handler {
-	resolve := opts.Resolve
-	if resolve == nil {
-		resolve = func(context.Context) event.Actor { return event.Actor{Type: "anonymous"} }
-	}
-	logger := opts.Logger
-	if logger == nil {
-		logger = slog.Default()
-	}
+	resolve, logger := opts.resolve(), opts.logger()
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

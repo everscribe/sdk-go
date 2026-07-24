@@ -21,6 +21,20 @@ type Options struct {
 	Logger event.Logger
 }
 
+func (o Options) resolve() event.ActorResolver {
+	if o.Resolve == nil {
+		return func(context.Context) event.Actor { return event.Actor{Type: "anonymous"} }
+	}
+	return o.Resolve
+}
+
+func (o Options) logger() event.Logger {
+	if o.Logger == nil {
+		return slog.Default()
+	}
+	return o.Logger
+}
+
 // New returns gin middleware that installs a per-request event and records
 // it once after the handler chain completes. Handlers reach it with
 // event.Current(c.Request.Context()).
@@ -28,14 +42,7 @@ type Options struct {
 // Mount it AFTER any auth middleware, since Resolve typically reads
 // session state.
 func New(opts Options) gingonic.HandlerFunc {
-	resolve := opts.Resolve
-	if resolve == nil {
-		resolve = func(context.Context) event.Actor { return event.Actor{Type: "anonymous"} }
-	}
-	logger := opts.Logger
-	if logger == nil {
-		logger = slog.Default()
-	}
+	resolve, logger := opts.resolve(), opts.logger()
 
 	return func(c *gingonic.Context) {
 		tmpl := &event.Event{

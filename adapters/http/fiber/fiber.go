@@ -56,6 +56,20 @@ type Options struct {
 	Logger event.Logger
 }
 
+func (o Options) resolve() event.ActorResolver {
+	if o.Resolve == nil {
+		return func(context.Context) event.Actor { return event.Actor{Type: "anonymous"} }
+	}
+	return o.Resolve
+}
+
+func (o Options) logger() event.Logger {
+	if o.Logger == nil {
+		return slog.Default()
+	}
+	return o.Logger
+}
+
 // New returns fiber middleware that installs a per-request event and
 // records it once after the handler chain completes. Handlers reach it
 // with event.Current(c.Context()).
@@ -68,14 +82,7 @@ type Options struct {
 // records with ok == false, and recover then converts the panic into the
 // response.
 func New(opts Options) fiberv3.Handler {
-	resolve := opts.Resolve
-	if resolve == nil {
-		resolve = func(context.Context) event.Actor { return event.Actor{Type: "anonymous"} }
-	}
-	logger := opts.Logger
-	if logger == nil {
-		logger = slog.Default()
-	}
+	resolve, logger := opts.resolve(), opts.logger()
 
 	return func(c fiberv3.Ctx) error {
 		oc := &capture{c: c}
