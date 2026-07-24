@@ -13,9 +13,10 @@
 
 # everscribe/sdk-go
 
-Go SDK for the [Everscribe](https://everscribe.io) API. It exposes a
-**recorder** for writing append-only audit events and a **minter** for issuing
-short-lived browser tokens for [embeddable components](https://github.com/everscribe/components).
+Go SDK for the [Everscribe](https://everscribe.io) API. It exposes **middleware**
+that records an audit event per request, a **recorder** for writing append-only
+audit events directly, and a **minter** for issuing short-lived browser tokens
+for [embeddable components](https://github.com/everscribe/components).
 
 ## 📖 Documentation
 
@@ -26,3 +27,37 @@ short-lived browser tokens for [embeddable components](https://github.com/eversc
 [Full-stack runnable examples](https://github.com/everscribe/examples): end-to-end sample apps
 
 </div>
+
+## Supported frameworks
+
+All adapters live in `pkg/event` and take the same `event.Options`.
+
+| Protocol | Framework | Mount |
+|---|---|---|
+| HTTP | `net/http`, chi, gorilla/mux | `event.Middleware` |
+| HTTP | gin | `event.GinMiddleware` |
+| HTTP | echo v4 | `event.EchoV4Middleware` |
+| HTTP | fiber v3 | `event.FiberV3Middleware` |
+| gRPC | grpc-go | `event.UnaryInterceptor`, `event.StreamInterceptor` |
+
+chi and gorilla/mux need no adapter of their own: both are plain
+`func(http.Handler) http.Handler`, so `event.Middleware` mounts directly.
+
+```go
+mw := event.Middleware(event.Options{
+    Recorder: recorder.New(projectID, apiKey),
+    Resolve:  func(ctx context.Context) event.Actor { /* ... */ },
+})
+
+func handleLogin(w http.ResponseWriter, r *http.Request) {
+    event.Current(r.Context()).Action = "user.login"
+    // the middleware records it once the handler returns
+}
+```
+
+Adapters are not identical in every respect. [docs/adapters.md](docs/adapters.md)
+compares them and documents two behavioral divergences worth knowing before you
+assume one framework's behavior carries to another.
+
+A framework missing? [Open an issue](https://github.com/everscribe/sdk-go/issues).
+Adding one is a single file against the same lifecycle.
