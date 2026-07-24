@@ -1,0 +1,62 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - .
+          - adapters/http/stdlib
+          - adapters/http/gin
+          - adapters/http/echo
+          - adapters/http/fiber
+          - adapters/grpc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+      - name: Build
+        working-directory: ${{ matrix.module }}
+        run: go build ./...
+      - name: Vet
+        working-directory: ${{ matrix.module }}
+        run: go vet ./...
+      - name: Test
+        working-directory: ${{ matrix.module }}
+        run: go test ./... -count=1 -race
+
+  root-module-purity:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+      - name: Root module must not import any transport package
+        run: |
+          if go list -deps ./pkg/event | grep -qx 'net/http'; then
+            echo "pkg/event imports net/http; core must stay transport-neutral"
+            exit 1
+          fi
+      - name: Root go.mod must stay at uuid plus testify
+        run: |
+          unexpected=$(grep -E '^\s+(github\.com|google\.golang\.org)' go.mod \
+            | grep -vE 'google/uuid|stretchr/testify|davecgh/go-spew|pmezard/go-difflib|gopkg\.in/yaml' || true)
+          if [ -n "$unexpected" ]; then
+            echo "unexpected dependency in the root module:"
+            echo "$unexpected"
+            exit 1
+          fi
