@@ -59,17 +59,17 @@ func UnaryInterceptor(opts Options) googlegrpc.UnaryServerInterceptor {
 	resolve, logger := opts.resolve(), opts.logger()
 
 	return func(ctx context.Context, req any, info *googlegrpc.UnaryServerInfo, handler googlegrpc.UnaryHandler) (any, error) {
-		cap := &statusCapture{}
+		oc := &statusCapture{}
 		tmpl := &event.Event{
 			Actor:  resolve(ctx),
 			Action: info.FullMethod,
 			Origin: originFrom(ctx),
 		}
-		ctx, end := event.Begin(ctx, tmpl, cap, opts.Recorder, logger)
-		defer end() // runs after cap.set below, since defers run last
+		ctx, end := event.Begin(ctx, tmpl, oc, opts.Recorder, logger)
+		defer end() // runs after oc.set below, since defers run last
 
 		resp, err := handler(ctx, req)
-		cap.set(err)
+		oc.set(err)
 		return resp, err
 	}
 }
@@ -91,17 +91,17 @@ func StreamInterceptor(opts Options) googlegrpc.StreamServerInterceptor {
 
 	return func(srv any, ss googlegrpc.ServerStream, info *googlegrpc.StreamServerInfo, handler googlegrpc.StreamHandler) error {
 		parent := ss.Context()
-		cap := &statusCapture{}
+		oc := &statusCapture{}
 		tmpl := &event.Event{
 			Actor:  resolve(parent),
 			Action: info.FullMethod,
 			Origin: originFrom(parent),
 		}
-		ctx, end := event.Begin(parent, tmpl, cap, opts.Recorder, logger)
+		ctx, end := event.Begin(parent, tmpl, oc, opts.Recorder, logger)
 		defer end()
 
 		err := handler(srv, &wrappedStream{ServerStream: ss, ctx: ctx})
-		cap.set(err)
+		oc.set(err)
 		// Stamp at close, overwriting Begin's open-time default.
 		event.Current(ctx).OccurredAt = time.Now().UTC()
 		return err
