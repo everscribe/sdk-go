@@ -1,8 +1,7 @@
-package grpc_test
+package adapters_test
 
 import (
 	"context"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -11,36 +10,13 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	evergrpc "github.com/everscribe/sdk-go/adapters/grpc"
 	"github.com/everscribe/sdk-go/pkg/event"
+	"github.com/everscribe/sdk-go/pkg/grpc/adapters"
 )
-
-type spyRecorder struct {
-	mu  sync.Mutex
-	got []event.Event
-}
-
-func (s *spyRecorder) Record(ctx context.Context, e *event.Event) error {
-	event.PrepareEvent(ctx, e)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.got = append(s.got, *e)
-	return nil
-}
-
-func (s *spyRecorder) events() []event.Event {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]event.Event(nil), s.got...)
-}
-
-type nopLogger struct{}
-
-func (nopLogger) Error(string, ...any) {}
 
 func invoke(t *testing.T, spy *spyRecorder, handler googlegrpc.UnaryHandler) {
 	t.Helper()
-	ic := evergrpc.UnaryInterceptor(evergrpc.Options{Recorder: spy, Logger: nopLogger{}})
+	ic := adapters.EventUnaryInterceptor(adapters.Options{Recorder: spy, Logger: nopLogger{}})
 	info := &googlegrpc.UnaryServerInfo{FullMethod: "/everscribe.v1.Ingest/Record"}
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs(
 		"user-agent", "grpc-go/1.68",
@@ -111,7 +87,7 @@ func TestUnary_OriginFromMetadataAndPeer(t *testing.T) {
 }
 
 // TestUnary_CloneInsideHandlerStaysUnnamed is the I5 falsification.
-// UnaryInterceptor used to set Action: info.FullMethod on the template
+// EventUnaryInterceptor used to set Action: info.FullMethod on the template
 // passed to Begin, so every event.FromContext clone made inside the
 // handler silently inherited the RPC method name instead of coming back
 // unnamed. A secondary event the handler never explicitly named would then

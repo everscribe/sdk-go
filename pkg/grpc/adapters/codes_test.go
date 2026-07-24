@@ -1,4 +1,4 @@
-package grpc_test
+package adapters_test
 
 import (
 	"testing"
@@ -6,8 +6,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 
-	evergrpc "github.com/everscribe/sdk-go/adapters/grpc"
 	"github.com/everscribe/sdk-go/pkg/event"
+	"github.com/everscribe/sdk-go/pkg/grpc/adapters"
 )
 
 func TestHTTPStatusFor(t *testing.T) {
@@ -38,7 +38,7 @@ func TestHTTPStatusFor(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.code.String(), func(t *testing.T) {
 			t.Parallel()
-			require.Equal(t, tt.want, evergrpc.HTTPStatusFor(tt.code))
+			require.Equal(t, tt.want, adapters.HTTPStatusFor(tt.code))
 		})
 	}
 }
@@ -48,7 +48,7 @@ func TestHTTPStatusFor(t *testing.T) {
 // as JSONB, so result.code would never match a successful call.
 func TestOKIsNotZero(t *testing.T) {
 	t.Parallel()
-	got := event.ResultFromHTTPStatus(evergrpc.HTTPStatusFor(codes.OK))
+	got := event.ResultFromHTTPStatus(adapters.HTTPStatusFor(codes.OK))
 	require.Equal(t, "ok", got.Status)
 	require.Equal(t, 200, got.Code)
 	require.NotZero(t, got.Code, "a zero code is dropped on the wire")
@@ -57,7 +57,7 @@ func TestOKIsNotZero(t *testing.T) {
 func TestDeniedCodesMapToDenied(t *testing.T) {
 	t.Parallel()
 	for _, c := range []codes.Code{codes.PermissionDenied, codes.Unauthenticated} {
-		got := event.ResultFromHTTPStatus(evergrpc.HTTPStatusFor(c))
+		got := event.ResultFromHTTPStatus(adapters.HTTPStatusFor(c))
 		require.Equal(t, "denied", got.Status, c.String())
 	}
 }

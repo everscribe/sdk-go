@@ -1,8 +1,9 @@
-// Package grpc is the grpc-go server adapter.
+// Package adapters is the grpc-go server adapter.
 //
-// It sits at the protocol level, as a peer of the http adapters rather
-// than a sibling of gin. If Connect support is added later it becomes
-// adapters/connect, since Connect is its own protocol.
+// It sits at the protocol level, as a peer of the http adapters package
+// rather than a sibling of gin. If Connect support is added later it
+// becomes its own adapters/connect package, since Connect is its own
+// protocol.
 //
 // Unlike the HTTP adapters, this one names every RPC by default: both
 // interceptors stamp Action = info.FullMethod on the request-scoped event
@@ -19,7 +20,7 @@
 // the RPC method name - they come back unnamed, like everywhere else, and
 // are dropped by the empty-Action guard every stock recorder applies
 // unless the handler names them.
-package grpc
+package adapters
 
 import (
 	"context"
@@ -34,7 +35,7 @@ import (
 	"github.com/everscribe/sdk-go/pkg/event"
 )
 
-// Options configures the interceptors. Same shape as every other adapter.
+// Options configures the interceptors.
 type Options struct {
 	// Resolve derives the Actor. nil yields an anonymous actor.
 	Resolve event.ActorResolver
@@ -59,8 +60,8 @@ func (o Options) logger() event.Logger {
 	return o.Logger
 }
 
-// UnaryInterceptor returns a grpc.UnaryServerInterceptor that installs a
-// per-request event and records it once after the handler returns.
+// EventUnaryInterceptor returns a grpc.UnaryServerInterceptor that installs
+// a per-request event and records it once after the handler returns.
 //
 // Recording after handler() returns is the only point at which the outcome
 // is knowable: the status derives from the error the handler returns, which
@@ -71,7 +72,7 @@ func (o Options) logger() event.Logger {
 // "/everscribe.v1.Ingest/Record". Handlers may overwrite it.
 //
 // Mount with grpc.ChainUnaryInterceptor.
-func UnaryInterceptor(opts Options) googlegrpc.UnaryServerInterceptor {
+func EventUnaryInterceptor(opts Options) googlegrpc.UnaryServerInterceptor {
 	resolve, logger := opts.resolve(), opts.logger()
 
 	return func(ctx context.Context, req any, info *googlegrpc.UnaryServerInfo, handler googlegrpc.UnaryHandler) (any, error) {
@@ -95,7 +96,7 @@ func UnaryInterceptor(opts Options) googlegrpc.UnaryServerInterceptor {
 	}
 }
 
-// StreamInterceptor returns a grpc.StreamServerInterceptor.
+// EventStreamInterceptor returns a grpc.StreamServerInterceptor.
 //
 // One event per stream, not one per message, recorded at stream close.
 // OccurredAt is stamped at close rather than open: the poll endpoint
@@ -107,7 +108,7 @@ func UnaryInterceptor(opts Options) googlegrpc.UnaryServerInterceptor {
 // RPCs, so those streams finish and record through the ordinary path;
 // Stop terminates them and the handler returns an error, which also
 // records through the ordinary path.
-func StreamInterceptor(opts Options) googlegrpc.StreamServerInterceptor {
+func EventStreamInterceptor(opts Options) googlegrpc.StreamServerInterceptor {
 	resolve, logger := opts.resolve(), opts.logger()
 
 	return func(srv any, ss googlegrpc.ServerStream, info *googlegrpc.StreamServerInfo, handler googlegrpc.StreamHandler) error {
@@ -118,7 +119,7 @@ func StreamInterceptor(opts Options) googlegrpc.StreamServerInterceptor {
 			Origin: originFrom(parent),
 		}
 		ctx, end := event.Begin(parent, tmpl, oc, opts.Recorder, logger)
-		// See the matching comment in UnaryInterceptor: stamped on the
+		// See the matching comment in EventUnaryInterceptor: stamped on the
 		// request-scoped event, not the template, so FromContext clones stay
 		// unnamed.
 		event.Current(ctx).Action = info.FullMethod

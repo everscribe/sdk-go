@@ -1,4 +1,4 @@
-package grpc
+package adapters
 
 import (
 	"net/http"
