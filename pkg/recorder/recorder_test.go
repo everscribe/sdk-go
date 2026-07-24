@@ -90,7 +90,18 @@ func TestNew_RecordFlushClose(t *testing.T) {
 	require.Equal(t, "a.two", batches[0][1].Action)
 }
 
-func TestNew_AutoCapturesResultViaMiddleware(t *testing.T) {
+// stubOutcome is a minimal event.OutcomeCapture, standing in for a
+// transport adapter's response-writer capture without importing one:
+// pkg/recorder is part of the core module and must not depend on an
+// adapters/ module.
+type stubOutcome struct {
+	result event.Result
+	ok     bool
+}
+
+func (s stubOutcome) Outcome() (event.Result, bool) { return s.result, s.ok }
+
+func TestNew_AutoCapturesResultViaOutcomeCapture(t *testing.T) {
 	t.Parallel()
 
 	var captured event.Event
@@ -103,14 +114,13 @@ func TestNew_AutoCapturesResultViaMiddleware(t *testing.T) {
 
 	rec := NewHTTPRecorder(testProjectID, "k", WithBaseURL(apiSrv.URL))
 
-	handler := event.NewMiddleware(nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		e := event.FromContext(r.Context())
-		e.Action = "user.lock"
-		w.WriteHeader(http.StatusForbidden)
-		require.NoError(t, rec.Record(r.Context(), e))
-	}))
+	capture := stubOutcome{result: event.Result{Status: "denied", Code: http.StatusForbidden}, ok: true}
+	ctx, end := event.Begin(context.Background(), &event.Event{}, capture, nil, nil)
+	defer end()
 
-	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/", nil))
+	e := event.Current(ctx)
+	e.Action = "user.lock"
+	require.NoError(t, rec.Record(ctx, e))
 
 	require.Equal(t, "denied", captured.Result.Status)
 	require.Equal(t, http.StatusForbidden, captured.Result.Code)

@@ -3,8 +3,6 @@ package event
 import (
 	"context"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -238,69 +236,4 @@ func TestEvent_RawDiff(t *testing.T) {
 			require.Equal(t, tc.patch, e.Change.Patch)
 		})
 	}
-}
-
-func TestClientIP(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name       string
-		headers    map[string]string
-		remoteAddr string
-		want       string
-	}{
-		{
-			name:    "x forwarded for first entry",
-			headers: map[string]string{"X-Forwarded-For": "1.2.3.4, 10.0.0.1, 10.0.0.2"},
-			want:    "1.2.3.4",
-		},
-		{
-			name:    "x real ip",
-			headers: map[string]string{"X-Real-IP": "5.6.7.8"},
-			want:    "5.6.7.8",
-		},
-		{
-			name: "x forwarded for preferred over x real ip",
-			headers: map[string]string{
-				"X-Forwarded-For": "1.2.3.4",
-				"X-Real-IP":       "5.6.7.8",
-			},
-			want: "1.2.3.4",
-		},
-		{
-			name:       "fallback to remote addr strips port",
-			remoteAddr: "9.10.11.12:54321",
-			want:       "9.10.11.12",
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			r := httptest.NewRequest(http.MethodGet, "/", nil)
-			for k, v := range tc.headers {
-				r.Header.Set(k, v)
-			}
-			if tc.remoteAddr != "" {
-				r.RemoteAddr = tc.remoteAddr
-			}
-			require.Equal(t, tc.want, clientIP(r))
-		})
-	}
-}
-
-func TestOriginFromRequest_NilRequest(t *testing.T) {
-	t.Parallel()
-	require.Equal(t, Origin{}, originFromRequest(nil))
-}
-
-func TestOriginFromRequest_FullPopulation(t *testing.T) {
-	t.Parallel()
-	r := httptest.NewRequest(http.MethodPost, "/", nil)
-	r.Header.Set("X-Forwarded-For", "1.2.3.4")
-	r.Header.Set("User-Agent", "test-ua/1.0")
-	r.Header.Set("X-Request-ID", "req-abc")
-
-	o := originFromRequest(r)
-	require.Equal(t, "1.2.3.4", o.IP)
-	require.Equal(t, "test-ua/1.0", o.UserAgent)
-	require.Equal(t, "req-abc", o.RequestID)
 }

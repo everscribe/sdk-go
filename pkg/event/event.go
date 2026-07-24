@@ -3,7 +3,6 @@ package event
 import (
 	"context"
 	"encoding/json"
-	"net/http"
 	"strings"
 	"time"
 
@@ -11,9 +10,9 @@ import (
 )
 
 // Event is the canonical audit record. Construct via NewEvent (non-HTTP)
-// or FromContext (HTTP, after NewMiddleware has run), populate the handler-
-// specific fields (Action, Target, Metadata, optionally Result), and pass
-// to Recorder.Record.
+// or FromContext (HTTP, after an adapter's Begin has run), populate the
+// handler-specific fields (Action, Target, Metadata, optionally Result),
+// and pass to Recorder.Record.
 type Event struct {
 	ID             string         `json:"id"`
 	TenantID       string         `json:"tenant_id,omitempty"`
@@ -48,6 +47,16 @@ type Actor struct {
 	Email       string `json:"email,omitempty"`
 }
 
+// ActorResolver derives an Actor from request context. Typically reads
+// session data attached by an upstream auth middleware. The recorder
+// package does not know about any specific session type - each adapter
+// wires up a resolver that matches its own auth model.
+type ActorResolver func(ctx context.Context) Actor
+
+// eventTemplateKey is the context key an adapter's Begin call uses to
+// install the per-request Event template that FromContext reads.
+type eventTemplateKey struct{}
+
 // Target identifies what the event was acting on. Empty means no target.
 type Target struct {
 	Type string `json:"type,omitempty"`
@@ -74,9 +83,9 @@ func New(action string) *Event {
 }
 
 // FromContext returns a fresh Event pre-populated from the request-scoped
-// template installed by NewMiddleware. If no template is present (middleware
-// not mounted, or called outside the request path), returns a minimal
-// Event equivalent to NewEvent("").
+// template installed by an adapter's Begin call. If no template is present
+// (no adapter mounted, or called outside the request path), returns a
+// minimal Event equivalent to NewEvent("").
 //
 // Each call returns an independent Event - mutating the returned value
 // does not affect other events derived from the same context. Handlers
@@ -207,26 +216,19 @@ func PrepareEvent(ctx context.Context, e *Event) {
 		e.OccurredAt = time.Now().UTC()
 	}
 
-	// The Begin/Current path takes precedence; the wrappedWriterKey path
-	// below keeps the existing NewMiddleware working unchanged.
-	if st, ok := ctx.Value(requestStateKey{}).(*requestState); ok && st != nil {
-		applyOutcome(st, e)
-		// Pointer identity, not ID equality: FromContext clones are distinct
-		// events and must not be suppressed. This only records that a
-		// submission happened; it cannot abort one, because PrepareEvent
-		// returns nothing and both recorders send unconditionally after
-		// calling it. It suppresses the adapter path; the idempotency key
-		// covers the reverse ordering.
-		if e == st.current {
-			st.recorded.Store(true)
-		}
+	st, ok := ctx.Value(requestStateKey{}).(*requestState)
+	if !ok || st == nil {
 		return
 	}
-
-	if e.Result.Status == "" {
-		if rw, ok := ctx.Value(wrappedWriterKey{}).(*responseWriter); ok {
-			e.Result = resultFromWrappedWriter(rw)
-		}
+	applyOutcome(st, e)
+	// Pointer identity, not ID equality: FromContext clones are distinct
+	// events and must not be suppressed. This only records that a
+	// submission happened; it cannot abort one, because PrepareEvent
+	// returns nothing and both recorders send unconditionally after
+	// calling it. It suppresses the adapter path; the idempotency key
+	// covers the reverse ordering.
+	if e == st.current {
+		st.recorded.Store(true)
 	}
 }
 
@@ -316,36 +318,4 @@ func atoi(s string) (int, bool) {
 		n = n*10 + int(c-'0')
 	}
 	return n, true
-}
-
-// originFromRequest extracts network context from an HTTP request.
-// Respects X-Forwarded-For (first entry) and X-Real-IP before falling
-// back to RemoteAddr. Callers behind a proxy should sanitize untrusted
-// client-supplied headers upstream.
-func originFromRequest(r *http.Request) Origin {
-	if r == nil {
-		return Origin{}
-	}
-	return Origin{
-		IP:        clientIP(r),
-		UserAgent: r.UserAgent(),
-		RequestID: r.Header.Get("X-Request-ID"),
-	}
-}
-
-func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if comma := strings.IndexByte(xff, ','); comma >= 0 {
-			return strings.TrimSpace(xff[:comma])
-		}
-		return strings.TrimSpace(xff)
-	}
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return xri
-	}
-	addr := r.RemoteAddr
-	if colon := strings.LastIndexByte(addr, ':'); colon >= 0 {
-		return addr[:colon]
-	}
-	return addr
 }

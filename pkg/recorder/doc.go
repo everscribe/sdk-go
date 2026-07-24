@@ -58,12 +58,11 @@
 //	    http.Redirect(w, r, "/users/"+userID, http.StatusSeeOther)
 //	}
 //
-// The deferred Record call reads the final HTTP status from the
-// middleware-wrapped ResponseWriter (stashed on the request context by
-// event.NewMiddleware) and auto-populates Event.Result when it is unset.
-// Handlers override by setting e.Result explicitly - useful for
-// POST-redirect-GET flows where HTTP status is the same on success and
-// failure.
+// Result is auto-populated from the adapter's OutcomeCapture when it is
+// unset. Adapters own the record call, so handlers usually do not call
+// Record at all - see the adapters/ modules. Handlers override by setting
+// e.Result explicitly - useful for POST-redirect-GET flows where HTTP
+// status is the same on success and failure.
 //
 // If Action is empty at Record time, the call is a no-op. Handlers that
 // early-return before setting Action do not emit garbage events.
@@ -100,26 +99,28 @@
 //	e.Target = event.Target{Type: "subscription", ID: subID}
 //	_ = rec.Record(ctx, e)
 //
-// # Middleware and ActorResolver
+// # Adapters and ActorResolver
 //
-// HTTP servers mount event.NewMiddleware to pre-populate request contexts
-// with an Event template and stash the wrapped ResponseWriter for
-// status auto-capture. The middleware takes an ActorResolver that
-// derives the Actor from session state - the recorder package has no
-// opinion about what a "session" is, so each server wires up a resolver
-// matching its own auth model:
+// HTTP servers mount an adapter from the adapters/ modules, which installs
+// a per-request Event and records it once after the handler completes.
+// Each adapter takes an ActorResolver deriving the Actor from session
+// state - the recorder package has no opinion about what a "session" is,
+// so each server wires up a resolver matching its own auth model:
 //
-//	eventMw := event.NewMiddleware(func(ctx context.Context) event.Actor {
-//	    s, ok := session.FromContext(ctx)
-//	    if !ok {
-//	        return event.Actor{Type: "anonymous"}
-//	    }
-//	    return event.Actor{
-//	        Type:        "user",
-//	        ID:          s.UserID,
-//	        DisplayName: s.Username,
-//	        Email:       s.Email,
-//	    }
+//	mw := stdlib.New(stdlib.Options{
+//	    Recorder: rec,
+//	    Resolve: func(ctx context.Context) event.Actor {
+//	        s, ok := session.FromContext(ctx)
+//	        if !ok {
+//	            return event.Actor{Type: "anonymous"}
+//	        }
+//	        return event.Actor{
+//	            Type:        "user",
+//	            ID:          s.UserID,
+//	            DisplayName: s.Username,
+//	            Email:       s.Email,
+//	        }
+//	    },
 //	})
 //
 // Middleware ordering: Logging -> CSRF -> Session -> Audit -> Routes.
