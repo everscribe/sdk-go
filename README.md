@@ -37,16 +37,11 @@ for [embeddable components](https://github.com/everscribe/components).
 - `echo v4`
 - `fiber v3`
 
-Your framework missing? [Open an issue](https://github.com/everscribe/sdk-go/issues).
-
-
-
-**gRPC**
-
-- grpc-go: `event.UnaryInterceptor`, `event.StreamInterceptor`
-
 chi and gorilla/mux need no adapter of their own: both are plain
 `func(http.Handler) http.Handler`, so `event.Middleware` mounts directly.
+
+gRPC servers are covered too, by `event.UnaryInterceptor` and
+`event.StreamInterceptor`.
 
 ```go
 mw := event.Middleware(event.Options{
@@ -64,7 +59,7 @@ Adapters are not identical in every respect. [docs/adapters.md](docs/adapters.md
 compares them and documents two behavioral divergences worth knowing before you
 assume one framework's behavior carries to another.
 
-Adding one is a single file against the same lifecycle.
+Your framework missing? [Open an issue](https://github.com/everscribe/sdk-go/issues).
 
 ## Additional resources
 
