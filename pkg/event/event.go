@@ -192,10 +192,13 @@ func (e *Event) RawDiff(before, after, patch json.RawMessage) *Event {
 }
 
 // PrepareEvent fills defaults on e: ID if empty, OccurredAt if zero,
-// and Result auto-captured from the middleware-wrapped ResponseWriter
-// stashed in ctx when Result is unset. Recorder implementations call
-// this on each Event before persisting so handlers can rely on
-// auto-populated fields.
+// and Result auto-captured from the in-scope outcome capture when Result
+// is unset. Recorder implementations call this on each Event before
+// persisting so handlers can rely on auto-populated fields.
+//
+// It also has a dedupe side effect, which is not obvious from the name:
+// when e is the request-scoped event installed by Begin, PrepareEvent marks
+// it recorded so the adapter's end does not submit it a second time.
 func PrepareEvent(ctx context.Context, e *Event) {
 	if e.ID == "" {
 		e.ID = uuid.NewString()
@@ -203,6 +206,23 @@ func PrepareEvent(ctx context.Context, e *Event) {
 	if e.OccurredAt.IsZero() {
 		e.OccurredAt = time.Now().UTC()
 	}
+
+	// PROTOTYPE: the Begin/Current path takes precedence; the wrappedWriterKey
+	// path below keeps the existing NewMiddleware working unchanged.
+	if st, ok := ctx.Value(requestStateKey{}).(*requestState); ok && st != nil {
+		applyOutcome(st, e)
+		// Pointer identity, not ID equality: FromContext clones are distinct
+		// events and must not be suppressed. This only records that a
+		// submission happened; it cannot abort one, because PrepareEvent
+		// returns nothing and both recorders send unconditionally after
+		// calling it. It suppresses the adapter path; the idempotency key
+		// covers the reverse ordering.
+		if e == st.current {
+			st.recorded.Store(true)
+		}
+		return
+	}
+
 	if e.Result.Status == "" {
 		if rw, ok := ctx.Value(wrappedWriterKey{}).(*responseWriter); ok {
 			e.Result = resultFromWrappedWriter(rw)
