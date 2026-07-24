@@ -37,27 +37,7 @@ for [embeddable components](https://github.com/everscribe/components).
 - `echo v4`
 - `fiber v3`
 
-chi and gorilla/mux need no adapter of their own: both are plain
-`func(http.Handler) http.Handler`, so `event.Middleware` mounts directly.
-
-gRPC servers are covered too, by `event.UnaryInterceptor` and
-`event.StreamInterceptor`.
-
-```go
-mw := event.Middleware(event.Options{
-    Recorder:      recorder.New(projectID, apiKey),
-    ActorResolver: func(ctx context.Context) event.Actor { /* ... */ },
-})
-
-func handleLogin(w http.ResponseWriter, r *http.Request) {
-    event.Current(r.Context()).Action = "user.login"
-    // the middleware records it once the handler returns
-}
-```
-
-Adapters are not identical in every respect. [docs/adapters.md](docs/adapters.md)
-compares them and documents two behavioral divergences worth knowing before you
-assume one framework's behavior carries to another.
+There are interceptors available for gRPC servers as well.
 
 Your framework missing? [Open an issue](https://github.com/everscribe/sdk-go/issues).
 
@@ -65,3 +45,14 @@ Your framework missing? [Open an issue](https://github.com/everscribe/sdk-go/iss
 
 [Runnable examples](https://github.com/everscribe/examples): end-to-end sample
 apps, front end through back end, for every Everscribe SDK.
+
+[AI-assisted setup demo](https://github.com/everscribe/ai-assisted-setup-demo): a
+sample repo for trying either AI setup path against something disposable. Run it
+before and after to see what the agent actually changed.
+
+[Everscribe CLI](https://github.com/everscribe/cli): `es` manages projects and
+API keys and lets you inspect, query, and live-tail audit events from the
+terminal. It is also how you install the BYOK setup skill.
+
+[Embeddable components](https://github.com/everscribe/components): drop-in audit
+trail UI, mounted with tokens from this SDK's minter.
