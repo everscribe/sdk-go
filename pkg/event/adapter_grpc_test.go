@@ -1,4 +1,4 @@
-package adapters_test
+package event_test
 
 import (
 	"context"
@@ -11,12 +11,11 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/everscribe/sdk-go/pkg/event"
-	"github.com/everscribe/sdk-go/pkg/grpc/adapters"
 )
 
 func invoke(t *testing.T, spy *spyRecorder, handler googlegrpc.UnaryHandler) {
 	t.Helper()
-	ic := adapters.EventUnaryInterceptor(adapters.Options{Recorder: spy, Logger: nopLogger{}})
+	ic := event.UnaryInterceptor(event.Options{Recorder: spy, Logger: nopLogger{}})
 	info := &googlegrpc.UnaryServerInfo{FullMethod: "/everscribe.v1.Ingest/Record"}
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs(
 		"user-agent", "grpc-go/1.68",
@@ -87,7 +86,7 @@ func TestUnary_OriginFromMetadataAndPeer(t *testing.T) {
 }
 
 // TestUnary_CloneInsideHandlerStaysUnnamed is the I5 falsification.
-// EventUnaryInterceptor used to set Action: info.FullMethod on the template
+// UnaryInterceptor used to set Action: info.FullMethod on the template
 // passed to Begin, so every event.FromContext clone made inside the
 // handler silently inherited the RPC method name instead of coming back
 // unnamed. A secondary event the handler never explicitly named would then

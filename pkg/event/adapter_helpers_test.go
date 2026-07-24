@@ -1,4 +1,4 @@
-package adapters_test
+package event_test
 
 import (
 	"context"
@@ -12,7 +12,11 @@ import (
 // callPrepare models the difference that drives the whole dedupe design: the
 // stock recorders call event.PrepareEvent (HTTPRecorder at http.go:105,
 // BufferedRecorder at buffered.go:180), but a custom Recorder is free not to,
-// which is the case the idempotency key exists to cover.
+// which is the case the idempotency key exists to cover. The gRPC adapter
+// tests only ever construct spyRecorder{} (callPrepare left at its zero
+// value, false): end() already applies the outcome and marks the event
+// recorded before calling Record, so whether the spy also calls PrepareEvent
+// itself has no observable effect on those tests.
 type spyRecorder struct {
 	mu          sync.Mutex
 	got         []event.Event

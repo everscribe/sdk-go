@@ -1,4 +1,4 @@
-package adapters_test
+package event_test
 
 import (
 	"bufio"
@@ -16,7 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/everscribe/sdk-go/pkg/event"
-	"github.com/everscribe/sdk-go/pkg/http/adapters"
 	"github.com/everscribe/sdk-go/pkg/recorder"
 )
 
@@ -25,7 +24,7 @@ import (
 // returned, so assertions do not race the auto-record.
 func serve(t *testing.T, rec event.Recorder, h http.HandlerFunc) (*httptest.Server, <-chan struct{}) {
 	t.Helper()
-	mw := adapters.StdlibEventMiddleware(adapters.Options{Recorder: rec, Logger: nopLogger{}})
+	mw := event.Middleware(event.Options{Recorder: rec, Logger: nopLogger{}})
 	finished := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer close(finished)

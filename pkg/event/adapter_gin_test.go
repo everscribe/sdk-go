@@ -1,4 +1,4 @@
-package adapters_test
+package event_test
 
 import (
 	"net/http"
@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/everscribe/sdk-go/pkg/event"
-	"github.com/everscribe/sdk-go/pkg/http/adapters"
 )
 
 // setModeOnce guards gingonic.SetMode, which writes unsynchronized
@@ -22,7 +21,7 @@ var setModeOnce sync.Once
 func newRouter(spy *spyRecorder, h gingonic.HandlerFunc) *gingonic.Engine {
 	setModeOnce.Do(func() { gingonic.SetMode(gingonic.TestMode) })
 	r := gingonic.New()
-	r.Use(adapters.GinEventMiddleware(adapters.Options{Recorder: spy, Logger: nopLogger{}}))
+	r.Use(event.GinMiddleware(event.Options{Recorder: spy, Logger: nopLogger{}}))
 	r.GET("/", h)
 	return r
 }

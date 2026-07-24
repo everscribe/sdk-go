@@ -1,4 +1,4 @@
-package adapters_test
+package event_test
 
 import (
 	"net/http"
@@ -9,12 +9,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/everscribe/sdk-go/pkg/event"
-	"github.com/everscribe/sdk-go/pkg/http/adapters"
 )
 
 func newEcho(spy *spyRecorder, h echov4.HandlerFunc) *echov4.Echo {
 	e := echov4.New()
-	e.Use(adapters.EchoEventMiddleware(adapters.Options{Recorder: spy, Logger: nopLogger{}}))
+	e.Use(event.EchoMiddleware(event.Options{Recorder: spy, Logger: nopLogger{}}))
 	e.GET("/", h)
 	return e
 }

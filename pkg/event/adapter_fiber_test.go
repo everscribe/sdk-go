@@ -1,4 +1,4 @@
-package adapters_test
+package event_test
 
 import (
 	"net/http"
@@ -10,12 +10,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/everscribe/sdk-go/pkg/event"
-	"github.com/everscribe/sdk-go/pkg/http/adapters"
 )
 
 func newApp(spy *spyRecorder, h fiberv3.Handler) *fiberv3.App {
 	app := fiberv3.New()
-	app.Use(adapters.FiberEventMiddleware(adapters.Options{Recorder: spy, Logger: nopLogger{}}))
+	app.Use(event.FiberMiddleware(event.Options{Recorder: spy, Logger: nopLogger{}}))
 	app.Get("/", h)
 	return app
 }
@@ -127,8 +126,8 @@ func TestFiber_NoWriteRecordsAsOK(t *testing.T) {
 // its own (confirmed by reading valyala/fasthttp v1.72.0's server.go and
 // workerpool.go, and by direct reproduction, which crashed the whole
 // process, not just the request). So this test mounts fiber's own
-// middleware/recover BEFORE (outer to) adapters.FiberEventMiddleware, which
-// is what a real application needs to do regardless of this SDK to avoid a
+// middleware/recover BEFORE (outer to) event.FiberMiddleware, which is
+// what a real application needs to do regardless of this SDK to avoid a
 // panicking handler taking down the whole server. That still exercises the
 // case that matters here: the panic unwinds through this middleware's own
 // defer end() before it reaches recover's defer, so completed is still
@@ -140,7 +139,7 @@ func TestFiber_PanicYieldsNoResponseWritten(t *testing.T) {
 	spy := &spyRecorder{callPrepare: true}
 	app := fiberv3.New()
 	app.Use(fiberrecover.New())
-	app.Use(adapters.FiberEventMiddleware(adapters.Options{Recorder: spy, Logger: nopLogger{}}))
+	app.Use(event.FiberMiddleware(event.Options{Recorder: spy, Logger: nopLogger{}}))
 	app.Get("/", func(c fiberv3.Ctx) error {
 		event.Current(c.Context()).Action = "user.login"
 		panic("boom")

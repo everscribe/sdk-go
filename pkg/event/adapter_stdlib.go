@@ -1,35 +1,33 @@
-package adapters
+package event
 
 import (
 	"bufio"
 	"net"
 	"net/http"
-
-	"github.com/everscribe/sdk-go/pkg/event"
 )
 
-// StdlibEventMiddleware is the net/http adapter. It also covers chi and
-// gorilla/mux, which are both plain func(http.Handler) http.Handler and
-// need no adapter of their own.
+// Middleware is the net/http adapter. It also covers chi and gorilla/mux,
+// which are both plain func(http.Handler) http.Handler and need no adapter
+// of their own.
 //
 // It returns middleware that installs a per-request event and records it
 // once after the handler completes. Handlers reach it with
-// event.Current(r.Context()) and name it by setting Action; an unnamed
-// event is never recorded.
+// Current(r.Context()) and name it by setting Action; an unnamed event is
+// never recorded.
 //
 // Mount it AFTER any auth middleware, since Resolve typically reads
 // session state. end is deferred, so it also runs while a panic unwinds.
-func StdlibEventMiddleware(opts Options) func(http.Handler) http.Handler {
+func Middleware(opts Options) func(http.Handler) http.Handler {
 	resolve, logger := opts.resolve(), opts.logger()
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			rw := &stdlibResponseWriter{ResponseWriter: w}
-			tmpl := &event.Event{
+			tmpl := &Event{
 				Actor:  resolve(r.Context()),
-				Origin: event.OriginFrom(r.Header.Get, r.RemoteAddr),
+				Origin: OriginFrom(r.Header.Get, r.RemoteAddr),
 			}
-			ctx, end := event.Begin(r.Context(), tmpl, rw, opts.Recorder, logger)
+			ctx, end := Begin(r.Context(), tmpl, rw, opts.Recorder, logger)
 			defer end()
 			next.ServeHTTP(rw, r.WithContext(ctx))
 		})
@@ -37,7 +35,7 @@ func StdlibEventMiddleware(opts Options) func(http.Handler) http.Handler {
 }
 
 // stdlibResponseWriter captures the final status and doubles as the
-// event.OutcomeCapture.
+// OutcomeCapture.
 //
 // Embedding http.ResponseWriter only promotes the three methods that
 // interface declares (Header, Write, WriteHeader). It does not make
@@ -101,13 +99,13 @@ func (rw *stdlibResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return hj.Hijack()
 }
 
-// Outcome implements event.OutcomeCapture. ok is false until a response is
+// Outcome implements OutcomeCapture. ok is false until a response is
 // actually written, which distinguishes "still in flight, or the handler
 // panicked" from a real status. A bare integer could not: gRPC's OK is
 // code 0, the same value that used to mean nothing written.
-func (rw *stdlibResponseWriter) Outcome() (event.Result, bool) {
+func (rw *stdlibResponseWriter) Outcome() (Result, bool) {
 	if !rw.wroteHeader {
-		return event.Result{}, false
+		return Result{}, false
 	}
-	return event.ResultFromHTTPStatus(rw.status), true
+	return ResultFromHTTPStatus(rw.status), true
 }

@@ -1,12 +1,10 @@
-package adapters
+package event
 
 import (
 	fiberv3 "github.com/gofiber/fiber/v3"
-
-	"github.com/everscribe/sdk-go/pkg/event"
 )
 
-// FiberEventMiddleware is the gofiber/fiber v3 adapter.
+// FiberMiddleware is the gofiber/fiber v3 adapter.
 //
 // Fiber is built on fasthttp rather than net/http, so there is no
 // *http.Request to reach for: headers come from c.Get, the remote address
@@ -16,12 +14,12 @@ import (
 //
 // The remote address deliberately goes through RequestCtx().RemoteAddr()
 // rather than the more obvious c.IP(): c.IP() returns a bare IP with no
-// port, but event.OriginFrom's remoteAddr parameter expects a real
-// host:port pair (it strips a trailing port when present). Passing a bare
-// IPv6 literal there corrupts it - "2001:db8::1" would come back as
-// "2001:db8:" - because the bare address has colons of its own that look
-// like a port separator. RemoteAddr().String() always includes the port
-// (and brackets IPv6 hosts), so it is unambiguous.
+// port, but OriginFrom's remoteAddr parameter expects a real host:port pair
+// (it strips a trailing port when present). Passing a bare IPv6 literal
+// there corrupts it - "2001:db8::1" would come back as "2001:db8:" -
+// because the bare address has colons of its own that look like a port
+// separator. RemoteAddr().String() always includes the port (and brackets
+// IPv6 hosts), so it is unambiguous.
 //
 // v3 only. In v3, fiber.Ctx implements context.Context via Context() and
 // SetContext, so ActorResolver takes it directly. v2 used c.UserContext()
@@ -32,7 +30,7 @@ import (
 //
 // It returns fiber middleware that installs a per-request event and
 // records it once after the handler chain completes. Handlers reach it
-// with event.Current(c.Context()).
+// with Current(c.Context()).
 //
 // Mount it AFTER any auth middleware, since Resolve typically reads
 // session state. If a panic-recovery middleware (such as
@@ -41,19 +39,19 @@ import (
 // middleware's own defer instead of skipping it: the audited event still
 // records with ok == false, and recover then converts the panic into the
 // response.
-func FiberEventMiddleware(opts Options) fiberv3.Handler {
+func FiberMiddleware(opts Options) fiberv3.Handler {
 	resolve, logger := opts.resolve(), opts.logger()
 
 	return func(c fiberv3.Ctx) error {
 		oc := &fiberCapture{c: c}
-		tmpl := &event.Event{
+		tmpl := &Event{
 			Actor: resolve(c.Context()),
-			Origin: event.OriginFrom(
+			Origin: OriginFrom(
 				func(name string) string { return c.Get(name) },
 				c.RequestCtx().RemoteAddr().String(),
 			),
 		}
-		ctx, end := event.Begin(c.Context(), tmpl, oc, opts.Recorder, logger)
+		ctx, end := Begin(c.Context(), tmpl, oc, opts.Recorder, logger)
 		defer end()
 		c.SetContext(ctx)
 
@@ -82,10 +80,10 @@ type fiberCapture struct {
 	completed bool
 }
 
-// Outcome implements event.OutcomeCapture.
-func (oc *fiberCapture) Outcome() (event.Result, bool) {
+// Outcome implements OutcomeCapture.
+func (oc *fiberCapture) Outcome() (Result, bool) {
 	if !oc.completed {
-		return event.Result{}, false
+		return Result{}, false
 	}
-	return event.ResultFromHTTPStatus(oc.c.Response().StatusCode()), true
+	return ResultFromHTTPStatus(oc.c.Response().StatusCode()), true
 }

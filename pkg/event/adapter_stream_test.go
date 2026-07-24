@@ -1,4 +1,4 @@
-package adapters_test
+package event_test
 
 import (
 	"context"
@@ -12,7 +12,6 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/everscribe/sdk-go/pkg/event"
-	"github.com/everscribe/sdk-go/pkg/grpc/adapters"
 )
 
 // fakeServerStream is a minimal googlegrpc.ServerStream stand-in. It carries
@@ -29,11 +28,11 @@ func (f *fakeServerStream) Context() context.Context     { return f.ctx }
 func (f *fakeServerStream) SendMsg(m any) error          { return nil }
 func (f *fakeServerStream) RecvMsg(m any) error          { return nil }
 
-// invokeStream wires spy up behind adapters.EventStreamInterceptor and runs
-// handler through it, the same way grpc.ChainStreamInterceptor would.
+// invokeStream wires spy up behind event.StreamInterceptor and runs handler
+// through it, the same way grpc.ChainStreamInterceptor would.
 func invokeStream(t *testing.T, spy *spyRecorder, handler googlegrpc.StreamHandler) error {
 	t.Helper()
-	ic := adapters.EventStreamInterceptor(adapters.Options{Recorder: spy, Logger: nopLogger{}})
+	ic := event.StreamInterceptor(event.Options{Recorder: spy, Logger: nopLogger{}})
 	info := &googlegrpc.StreamServerInfo{FullMethod: "/everscribe.v1.Tail/Watch"}
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs(
 		"user-agent", "grpc-go/1.68",
@@ -116,10 +115,9 @@ func TestStream_ContextThreadsToHandler(t *testing.T) {
 }
 
 // TestStream_CloneInsideHandlerStaysUnnamed is the I5 falsification for
-// the stream path: EventStreamInterceptor used to set Action:
-// info.FullMethod on the template too, so a FromContext clone made inside
-// the stream handler inherited the RPC method name instead of coming back
-// unnamed.
+// the stream path: StreamInterceptor used to set Action: info.FullMethod
+// on the template too, so a FromContext clone made inside the stream
+// handler inherited the RPC method name instead of coming back unnamed.
 func TestStream_CloneInsideHandlerStaysUnnamed(t *testing.T) {
 	t.Parallel()
 	spy := &spyRecorder{}
