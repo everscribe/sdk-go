@@ -207,8 +207,8 @@ func PrepareEvent(ctx context.Context, e *Event) {
 		e.OccurredAt = time.Now().UTC()
 	}
 
-	// PROTOTYPE: the Begin/Current path takes precedence; the wrappedWriterKey
-	// path below keeps the existing NewMiddleware working unchanged.
+	// The Begin/Current path takes precedence; the wrappedWriterKey path
+	// below keeps the existing NewMiddleware working unchanged.
 	if st, ok := ctx.Value(requestStateKey{}).(*requestState); ok && st != nil {
 		applyOutcome(st, e)
 		// Pointer identity, not ID equality: FromContext clones are distinct

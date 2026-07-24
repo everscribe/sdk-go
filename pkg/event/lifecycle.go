@@ -2,15 +2,9 @@ package event
 
 import (
 	"context"
-	"net/http"
 	"sync/atomic"
 	"time"
 )
-
-// PROTOTYPE. This file exists to validate the record-lifecycle half of
-// docs/specs/sdk-adapter-architecture.md before the real core refactor.
-// It adds Begin/Current alongside the existing NewMiddleware rather than
-// replacing it, so the current test suite keeps passing.
 
 // Recorder is the minimal sink pkg/event needs to own the record lifecycle.
 // pkg/recorder implementations satisfy it structurally; it is redeclared here
@@ -151,7 +145,7 @@ func ResultFromHTTPStatus(code int) Result {
 	switch {
 	case code >= 200 && code < 400:
 		r.Status = "ok"
-	case code == http.StatusUnauthorized || code == http.StatusForbidden:
+	case code == 401 || code == 403:
 		r.Status = "denied"
 	default:
 		r.Status = "error"
