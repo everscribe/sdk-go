@@ -21,8 +21,11 @@ import (
 // separator. RemoteAddr().String() always includes the port (and brackets
 // IPv6 hosts), so it is unambiguous.
 //
-// v3 only, for now. In v3, fiber.Ctx implements context.Context via
-// Context() and SetContext, so ActorResolver takes it directly. v2 used
+// v3 only, for now. In v3, fiber.Ctx satisfies context.Context, but its
+// Value method reads fiber Locals rather than a Go context chain, so
+// this adapter passes c.Context() to the resolver and to Begin, never c
+// itself. Handlers must do the same: Current(c) compiles and returns a
+// throwaway that is never recorded. v2 used
 // c.UserContext() and c.SetUserContext, which v3 renamed (and repurposed
 // Context() / SetContext for the fasthttp-backed context.Context, moving
 // the old fasthttp accessor to RequestCtx()).
