@@ -9,7 +9,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// Event is the canonical audit record. Construct via NewEvent (non-HTTP)
+// Event is the canonical audit record. Construct via New (non-HTTP)
 // or FromContext (HTTP, after an adapter's Begin has run), populate the
 // handler-specific fields (Action, Target, Metadata, optionally Result),
 // and pass to Recorder.Record.
@@ -85,7 +85,7 @@ func New(action string) *Event {
 // FromContext returns a fresh Event pre-populated from the request-scoped
 // template installed by an adapter's Begin call. If no template is present
 // (no adapter mounted, or called outside the request path), returns a
-// minimal Event equivalent to NewEvent("").
+// minimal Event equivalent to New("").
 //
 // Each call returns an independent Event - mutating the returned value
 // does not affect other events derived from the same context. Handlers
@@ -151,7 +151,7 @@ type eventDiffConfig struct {
 // logs: password hashes, API keys, PII.
 //
 //	e.Diff(before, after,
-//	    recorder.WithRedactedFields("/password_hash", "/api_keys/0"),
+//	    event.WithRedactedFields("/password_hash", "/api_keys/0"),
 //	)
 //
 // Paths that don't exist in the document are silently skipped.

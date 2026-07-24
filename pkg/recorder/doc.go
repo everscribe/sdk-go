@@ -91,7 +91,7 @@
 //
 // # Non-HTTP callers
 //
-// Background jobs, cron, and CLIs use NewEvent directly - no special
+// Background jobs, cron, and CLIs use event.New directly - no special
 // argument changes are needed since Record only takes a context:
 //
 //	e := event.New("subscription.trial_expired")

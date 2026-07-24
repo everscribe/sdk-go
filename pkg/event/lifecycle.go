@@ -82,6 +82,10 @@ func Begin(ctx context.Context, tmpl *Event, capture OutcomeCapture, rec Recorde
 // Current returns the request-scoped mutable event installed by Begin: the
 // event the adapter will auto-record. Handlers recording several events per
 // request use FromContext instead, which returns a clone with a fresh ID.
+// If no adapter installed one (no Begin has run on this context), Current
+// returns a throwaway *Event{} - the same "no template present" fallback
+// FromContext documents, so calling it outside a lifecycle is harmless but
+// its return value is never recorded.
 //
 // The concurrency contract covers all access to the returned event, not just
 // field assignment: only the request goroutine may touch it, including
