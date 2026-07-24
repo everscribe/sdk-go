@@ -47,14 +47,36 @@ jobs:
           go-version: '1.25'
       - name: Root module must not import any transport package
         run: |
-          if go list -deps ./pkg/event | grep -qx 'net/http'; then
+          set -u
+          # Capture go list's own output and exit status first, so a
+          # failure of go list (unresolved import, proxy hiccup, etc.)
+          # cannot masquerade as "no net/http found" via an empty grep.
+          if ! deps=$(go list -deps ./pkg/event 2>&1); then
+            echo "go list -deps ./pkg/event failed - cannot verify transport-neutrality:"
+            echo "$deps"
+            exit 1
+          fi
+          if echo "$deps" | grep -qx 'net/http'; then
             echo "pkg/event imports net/http; core must stay transport-neutral"
             exit 1
           fi
       - name: Root go.mod must stay at uuid plus testify
         run: |
-          unexpected=$(grep -E '^\s+(github\.com|google\.golang\.org)' go.mod \
-            | grep -vE 'google/uuid|stretchr/testify|davecgh/go-spew|pmezard/go-difflib|gopkg\.in/yaml' || true)
+          set -u
+          # Parse go.mod structurally via `go mod edit -json` instead of
+          # grepping raw text, so a bare top-level `require x v1` line (no
+          # leading whitespace) is caught the same as one inside an
+          # indented `require (...)` block.
+          if ! modjson=$(go mod edit -json); then
+            echo "go mod edit -json failed - cannot verify root module purity"
+            exit 1
+          fi
+          allowed='["github.com/google/uuid","github.com/stretchr/testify","github.com/davecgh/go-spew","github.com/pmezard/go-difflib","gopkg.in/yaml.v3"]'
+          unexpected=$(echo "$modjson" | jq -r --argjson allowed "$allowed" '
+            (.Require // [])[]
+            | select((.Path as $p | $allowed | index($p)) == null)
+            | "\(.Path) \(.Version)"
+          ')
           if [ -n "$unexpected" ]; then
             echo "unexpected dependency in the root module:"
             echo "$unexpected"
