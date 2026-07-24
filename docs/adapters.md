@@ -1,23 +1,24 @@
 # Adapter comparison
 
 Reference for choosing an adapter. Read once before mounting one; not a
-tutorial. Each adapter is its own Go module under `adapters/`, versioned
-and released independently of the root `everscribe` package.
+tutorial. Both adapter packages live in the root `github.com/everscribe/sdk-go`
+module, under `pkg/http/adapters` and `pkg/grpc/adapters`.
 
 ## At a glance
 
 | Adapter | Framework / version | Mount signature | Outcome derived from |
 |---|---|---|---|
-| `adapters/http/stdlib` | `net/http` (stdlib), Go 1.25.0. Also covers chi and gorilla/mux, which are both plain `func(http.Handler) http.Handler` | `stdlib.New(stdlib.Options{...}) func(http.Handler) http.Handler` | A wrapping `responseWriter`'s own `wroteHeader` flag |
-| `adapters/http/gin` | `github.com/gin-gonic/gin` v1.10.0 | `gin.New(gin.Options{...}) gin.HandlerFunc` | `c.Writer.Written()` and `c.Writer.Status()` |
-| `adapters/http/echo` | `github.com/labstack/echo/v4` v4.12.0 | `echo.New(echo.Options{...}) echo.MiddlewareFunc` | `c.Response().Committed` and `c.Response().Status` |
-| `adapters/http/fiber` | `github.com/gofiber/fiber/v3` v3.4.0 (v3 only; see below) | `fiber.New(fiber.Options{...}) fiber.Handler` | An explicit `completed` flag set after `c.Next()` returns, plus `c.Response().StatusCode()` |
-| `adapters/grpc` | `google.golang.org/grpc` v1.68.0 | `grpc.UnaryInterceptor(grpc.Options{...})` / `grpc.StreamInterceptor(grpc.Options{...})` | The error returned by the handler, mapped through the canonical gRPC-to-HTTP status table |
+| `pkg/http/adapters` (stdlib) | `net/http` (stdlib), Go 1.25.0. Also covers chi and gorilla/mux, which are both plain `func(http.Handler) http.Handler` | `adapters.StdlibEventMiddleware(adapters.Options{...}) func(http.Handler) http.Handler` | A wrapping `stdlibResponseWriter`'s own `wroteHeader` flag |
+| `pkg/http/adapters` (gin) | `github.com/gin-gonic/gin` v1.10.0 | `adapters.GinEventMiddleware(adapters.Options{...}) gin.HandlerFunc` | `c.Writer.Written()` and `c.Writer.Status()` |
+| `pkg/http/adapters` (echo) | `github.com/labstack/echo/v4` v4.12.0 | `adapters.EchoEventMiddleware(adapters.Options{...}) echo.MiddlewareFunc` | `c.Response().Committed` and `c.Response().Status` |
+| `pkg/http/adapters` (fiber) | `github.com/gofiber/fiber/v3` v3.4.0 (v3 only; see below) | `adapters.FiberEventMiddleware(adapters.Options{...}) fiber.Handler` | An explicit `completed` flag set after `c.Next()` returns, plus `c.Response().StatusCode()` |
+| `pkg/grpc/adapters` | `google.golang.org/grpc` v1.68.0 | `adapters.EventUnaryInterceptor(adapters.Options{...})` / `adapters.EventStreamInterceptor(adapters.Options{...})` | The error returned by the handler, mapped through the canonical gRPC-to-HTTP status table |
 
-All five `Options` structs have the same shape: `Resolve` (`event.ActorResolver`,
-nil yields an anonymous actor), `Recorder` (`event.Recorder`, nil installs
-the event but does not auto-record), and `Logger` (`event.Logger`, nil
-defaults to `slog.Default()`).
+All five mount points share one `Options` shape per package (`pkg/http/adapters.Options`
+and `pkg/grpc/adapters.Options` are structurally identical): `Resolve`
+(`event.ActorResolver`, nil yields an anonymous actor), `Recorder`
+(`event.Recorder`, nil installs the event but does not auto-record), and
+`Logger` (`event.Logger`, nil defaults to `slog.Default()`).
 
 ## Behavioral divergences
 
@@ -34,8 +35,8 @@ frameworks exposes a real written-signal:
 
 - gin: `c.Writer.Written()`
 - echo: `c.Response().Committed`
-- stdlib: the adapter's own `responseWriter.wroteHeader`, since `net/http`
-  itself exposes no such flag
+- stdlib: the adapter's own `stdlibResponseWriter.wroteHeader`, since
+  `net/http` itself exposes no such flag
 
 All three record that case as `Result{Status: "error", Message: "no
 response written"}`, with `Code` left at zero.
@@ -58,8 +59,8 @@ In practice: the exact same handler bug (a code path that returns without
 calling `w.WriteHeader` or `w.Write`) shows up as a recorded `error` under
 gin, echo, or stdlib, and as a recorded `ok` / 200 under fiber. This is a
 real, permanent limitation of building on fasthttp, not a bug in the
-adapter, and it is documented in the fiber adapter's package doc comment
-(`adapters/http/fiber/fiber.go`).
+adapter, and it is documented in the fiber adapter's doc comment
+(`pkg/http/adapters/fiber.go`).
 
 ### gRPC records every RPC by default
 
@@ -68,13 +69,13 @@ event by setting `Action` (typically via `event.Current(ctx).Action = "..."`).
 An unnamed event is never recorded - a handler that early-returns before
 naming anything just does not emit garbage events.
 
-The gRPC adapter is different: both `UnaryInterceptor` and
-`StreamInterceptor` stamp `Action = info.FullMethod` on the request-scoped
-event immediately after `Begin` returns, so every RPC is recorded unless
-the handler deliberately clears `event.Current(ctx).Action`. This is
-intentional: gRPC method names are a closed, meaningful set in a way
-arbitrary HTTP routes are not, so recording every call by default is the
-more useful default for this protocol.
+The gRPC adapter is different: both `EventUnaryInterceptor` and
+`EventStreamInterceptor` stamp `Action = info.FullMethod` on the
+request-scoped event immediately after `Begin` returns, so every RPC is
+recorded unless the handler deliberately clears `event.Current(ctx).Action`.
+This is intentional: gRPC method names are a closed, meaningful set in a
+way arbitrary HTTP routes are not, so recording every call by default is
+the more useful default for this protocol.
 
 The stamp is applied to `event.Current(ctx)`, the request-scoped event,
 not to the template `Begin` installs. `event.FromContext` clones the
@@ -85,9 +86,9 @@ applies unless the handler names it itself.
 
 ### fiber's v3-only constraint
 
-`adapters/http/fiber` targets `gofiber/fiber/v3` only. In v3,
-`fiber.Ctx` implements `context.Context` directly via `Context()` /
-`SetContext`, which is what lets `ActorResolver` take it as-is. v2 used
+The fiber adapter targets `gofiber/fiber/v3` only. In v3, `fiber.Ctx`
+implements `context.Context` directly via `Context()` / `SetContext`,
+which is what lets `ActorResolver` take it as-is. v2 used
 `c.UserContext()` / `c.SetUserContext` for the same purpose and repurposed
-`Context()` for the fasthttp-backed context, so a v2 adapter would need to
-be its own module rather than a version bump of this one.
+`Context()` for the fasthttp-backed context, so a v2 adapter would need
+its own package rather than a version bump of this one.
