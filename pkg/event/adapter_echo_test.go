@@ -13,7 +13,7 @@ import (
 
 func newEcho(spy *spyRecorder, h echov4.HandlerFunc) *echov4.Echo {
 	e := echov4.New()
-	e.Use(event.EchoMiddleware(event.Options{Recorder: spy, Logger: nopLogger{}}))
+	e.Use(event.EchoV4Middleware(event.Options{Recorder: spy, Logger: nopLogger{}}))
 	e.GET("/", h)
 	return e
 }

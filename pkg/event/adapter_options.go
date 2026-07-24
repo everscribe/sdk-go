@@ -6,7 +6,7 @@ import (
 )
 
 // Options configures the middleware and interceptors in this file group:
-// Middleware, GinMiddleware, EchoMiddleware, FiberMiddleware,
+// Middleware, GinMiddleware, EchoV4Middleware, FiberV3Middleware,
 // UnaryInterceptor, and StreamInterceptor all share this one declaration.
 type Options struct {
 	// Resolve derives the Actor. nil yields an anonymous actor.

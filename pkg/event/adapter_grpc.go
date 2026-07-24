@@ -2,8 +2,8 @@ package event
 
 // This file is the grpc-go server adapter.
 //
-// Unlike the HTTP adapters (Middleware, GinMiddleware, EchoMiddleware,
-// FiberMiddleware), this one names every RPC by default: both interceptors
+// Unlike the HTTP adapters (Middleware, GinMiddleware, EchoV4Middleware,
+// FiberV3Middleware), this one names every RPC by default: both interceptors
 // stamp Action = info.FullMethod on the request-scoped event right after
 // Begin returns, so every RPC records unless the handler clears
 // Current(ctx).Action. The HTTP adapters leave Action empty and record

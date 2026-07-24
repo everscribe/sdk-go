@@ -4,7 +4,7 @@ import (
 	fiberv3 "github.com/gofiber/fiber/v3"
 )
 
-// FiberMiddleware is the gofiber/fiber v3 adapter.
+// FiberV3Middleware is the gofiber/fiber v3 adapter.
 //
 // Fiber is built on fasthttp rather than net/http, so there is no
 // *http.Request to reach for: headers come from c.Get, the remote address
@@ -39,7 +39,7 @@ import (
 // middleware's own defer instead of skipping it: the audited event still
 // records with ok == false, and recover then converts the panic into the
 // response.
-func FiberMiddleware(opts Options) fiberv3.Handler {
+func FiberV3Middleware(opts Options) fiberv3.Handler {
 	resolve, logger := opts.resolve(), opts.logger()
 
 	return func(c fiberv3.Ctx) error {

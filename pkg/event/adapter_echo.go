@@ -4,13 +4,13 @@ import (
 	echov4 "github.com/labstack/echo/v4"
 )
 
-// EchoMiddleware is the labstack/echo adapter. It returns echo middleware
+// EchoV4Middleware is the labstack/echo adapter. It returns echo middleware
 // that installs a per-request event and records it once after the handler
 // completes. Handlers reach it with Current(c.Request().Context()).
 //
 // Mount it AFTER any auth middleware, since Resolve typically reads
 // session state.
-func EchoMiddleware(opts Options) echov4.MiddlewareFunc {
+func EchoV4Middleware(opts Options) echov4.MiddlewareFunc {
 	resolve, logger := opts.resolve(), opts.logger()
 
 	return func(next echov4.HandlerFunc) echov4.HandlerFunc {

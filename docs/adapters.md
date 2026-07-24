@@ -11,14 +11,28 @@ rest of the event lifecycle.
 |---|---|---|---|
 | `pkg/event` (stdlib) | `net/http` (stdlib), Go 1.25.0. Also covers chi and gorilla/mux, which are both plain `func(http.Handler) http.Handler` | `event.Middleware(event.Options{...}) func(http.Handler) http.Handler` | A wrapping `stdlibResponseWriter`'s own `wroteHeader` flag |
 | `pkg/event` (gin) | `github.com/gin-gonic/gin` v1.10.0 | `event.GinMiddleware(event.Options{...}) gin.HandlerFunc` | `c.Writer.Written()` and `c.Writer.Status()` |
-| `pkg/event` (echo) | `github.com/labstack/echo/v4` v4.12.0 | `event.EchoMiddleware(event.Options{...}) echo.MiddlewareFunc` | `c.Response().Committed` and `c.Response().Status` |
-| `pkg/event` (fiber) | `github.com/gofiber/fiber/v3` v3.4.0 (v3 only; see below) | `event.FiberMiddleware(event.Options{...}) fiber.Handler` | An explicit `completed` flag set after `c.Next()` returns, plus `c.Response().StatusCode()` |
+| `pkg/event` (echo) | `github.com/labstack/echo/v4` v4.12.0 | `event.EchoV4Middleware(event.Options{...}) echo.MiddlewareFunc` | `c.Response().Committed` and `c.Response().Status` |
+| `pkg/event` (fiber) | `github.com/gofiber/fiber/v3` v3.4.0 (v3 only; see below) | `event.FiberV3Middleware(event.Options{...}) fiber.Handler` | An explicit `completed` flag set after `c.Next()` returns, plus `c.Response().StatusCode()` |
 | `pkg/event` (gRPC) | `google.golang.org/grpc` v1.68.0 | `event.UnaryInterceptor(event.Options{...})` / `event.StreamInterceptor(event.Options{...})` | The error returned by the handler, mapped through the canonical gRPC-to-HTTP status table |
 
 All six mount points share one `event.Options`: `Resolve`
 (`event.ActorResolver`, nil yields an anonymous actor), `Recorder`
 (`event.Recorder`, nil installs the event but does not auto-record), and
 `Logger` (`event.Logger`, nil defaults to `slog.Default()`).
+
+**On the names.** A constructor carries the framework's major version exactly
+when the framework's module path does. `labstack/echo/v4` and `gofiber/fiber/v3`
+carry one, so they are `EchoV4Middleware` and `FiberV3Middleware`.
+`gin-gonic/gin` and `google.golang.org/grpc` do not, so they are `GinMiddleware`,
+`UnaryInterceptor`, and `StreamInterceptor`. `Middleware` takes the unqualified
+name because `net/http` is the default case.
+
+The point is additive support: when echo v5 ships, `EchoV5Middleware` can land
+alongside `EchoV4Middleware` rather than replacing it, so upgrading the SDK does
+not force a framework upgrade. Note the limit, though. All six adapters share
+one package and therefore one dependency set, and a single Go package can import
+only one major of a given module. So the two cannot actually coexist without
+splitting the package again. This is why fiber is v3 only today.
 
 ## Behavioral divergences
 
