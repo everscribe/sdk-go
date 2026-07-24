@@ -18,27 +18,31 @@ that records an audit event per request, a **recorder** for writing append-only
 audit events directly, and a **minter** for issuing short-lived browser tokens
 for [embeddable components](https://github.com/everscribe/components).
 
+</div>
+
 ## 📖 Documentation
 
-[Setup with AI](https://everscribe.io/docs/quickstart/overview#pick-a-setup-path): hosted agent or BYOK Claude Code skill
-
-[DIY](https://everscribe.io/docs/sdks/go-install): install and wire the SDK up yourself
-
-[Full-stack runnable examples](https://github.com/everscribe/examples): end-to-end sample apps
-
-</div>
+| Path | What it is | Pick it when |
+|---|---|---|
+| [Hosted AI agent](https://everscribe.io/docs/quickstart/hosted-ui) | You install our GitHub App. Our server-side agent walks your repo, proposes a plan, and opens a PR you review. | You want zero hand-wiring and are fine granting the GitHub App read access. |
+| [BYOK Claude Code skill](https://everscribe.io/docs/quickstart/skill) | A skill runs inside *your* Claude Code session against *your* Anthropic key. Same behavior, source never leaves your machine. | You want AI-driven setup without connecting a GitHub App. |
+| [Wire it up yourself](https://everscribe.io/docs/sdks/go-install) | Install the SDK and add the calls by hand. | You want full control, or you are instrumenting a small surface. |
+| [Runnable examples](https://github.com/everscribe/examples) | End-to-end sample apps, front end through back end. | You would rather read working code than docs. |
 
 ## Supported frameworks
 
 All adapters live in `pkg/event` and take the same `event.Options`.
 
-| Protocol | Framework | Mount |
-|---|---|---|
-| HTTP | `net/http`, chi, gorilla/mux | `event.Middleware` |
-| HTTP | gin | `event.GinMiddleware` |
-| HTTP | echo v4 | `event.EchoV4Middleware` |
-| HTTP | fiber v3 | `event.FiberV3Middleware` |
-| gRPC | grpc-go | `event.UnaryInterceptor`, `event.StreamInterceptor` |
+**HTTP**
+
+- `net/http`, chi, gorilla/mux: `event.Middleware`
+- gin: `event.GinMiddleware`
+- echo v4: `event.EchoV4Middleware`
+- fiber v3: `event.FiberV3Middleware`
+
+**gRPC**
+
+- grpc-go: `event.UnaryInterceptor`, `event.StreamInterceptor`
 
 chi and gorilla/mux need no adapter of their own: both are plain
 `func(http.Handler) http.Handler`, so `event.Middleware` mounts directly.
