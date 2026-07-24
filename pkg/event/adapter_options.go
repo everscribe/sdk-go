@@ -9,8 +9,8 @@ import (
 // Middleware, GinMiddleware, EchoV4Middleware, FiberV3Middleware,
 // UnaryInterceptor, and StreamInterceptor all share this one declaration.
 type Options struct {
-	// Resolve derives the Actor. nil yields an anonymous actor.
-	Resolve ActorResolver
+	// ActorResolver derives the Actor. nil yields an anonymous actor.
+	ActorResolver ActorResolver
 	// Recorder receives the auto-recorded event. nil installs the event
 	// but does not auto-record.
 	Recorder Recorder
@@ -19,10 +19,10 @@ type Options struct {
 }
 
 func (o Options) resolve() ActorResolver {
-	if o.Resolve == nil {
+	if o.ActorResolver == nil {
 		return func(context.Context) Actor { return Actor{Type: "anonymous"} }
 	}
-	return o.Resolve
+	return o.ActorResolver
 }
 
 func (o Options) logger() Logger {

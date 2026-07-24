@@ -8,7 +8,7 @@ import (
 // that installs a per-request event and records it once after the handler
 // completes. Handlers reach it with Current(c.Request().Context()).
 //
-// Mount it AFTER any auth middleware, since Resolve typically reads
+// Mount it AFTER any auth middleware, since ActorResolver typically reads
 // session state.
 func EchoV4Middleware(opts Options) echov4.MiddlewareFunc {
 	resolve, logger := opts.resolve(), opts.logger()

@@ -21,8 +21,8 @@
 //
 //	rec := recorder.New(projectID, apiKey)
 //	mw := event.Middleware(event.Options{
-//	    Recorder: rec,
-//	    Resolve: func(ctx context.Context) event.Actor {
+//	    Recorder:      rec,
+//	    ActorResolver: func(ctx context.Context) event.Actor {
 //	        s, ok := session.FromContext(ctx)
 //	        if !ok {
 //	            return event.Actor{Type: "anonymous"}
@@ -38,7 +38,7 @@
 //	    // no Record call: the adapter records e once the handler returns
 //	}
 //
-// Mount the adapter AFTER any auth middleware, since Resolve typically reads
+// Mount the adapter AFTER any auth middleware, since ActorResolver typically reads
 // session state.
 //
 // # Who records

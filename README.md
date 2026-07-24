@@ -45,8 +45,8 @@ chi and gorilla/mux need no adapter of their own: both are plain
 
 ```go
 mw := event.Middleware(event.Options{
-    Recorder: recorder.New(projectID, apiKey),
-    Resolve:  func(ctx context.Context) event.Actor { /* ... */ },
+    Recorder:      recorder.New(projectID, apiKey),
+    ActorResolver: func(ctx context.Context) event.Actor { /* ... */ },
 })
 
 func handleLogin(w http.ResponseWriter, r *http.Request) {

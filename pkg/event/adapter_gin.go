@@ -8,7 +8,7 @@ import (
 // installs a per-request event and records it once after the handler chain
 // completes. Handlers reach it with Current(c.Request.Context()).
 //
-// Mount it AFTER any auth middleware, since Resolve typically reads
+// Mount it AFTER any auth middleware, since ActorResolver typically reads
 // session state.
 func GinMiddleware(opts Options) gingonic.HandlerFunc {
 	resolve, logger := opts.resolve(), opts.logger()

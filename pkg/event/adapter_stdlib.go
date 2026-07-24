@@ -15,7 +15,7 @@ import (
 // Current(r.Context()) and name it by setting Action; an unnamed event is
 // never recorded.
 //
-// Mount it AFTER any auth middleware, since Resolve typically reads
+// Mount it AFTER any auth middleware, since ActorResolver typically reads
 // session state. end is deferred, so it also runs while a panic unwinds.
 func Middleware(opts Options) func(http.Handler) http.Handler {
 	resolve, logger := opts.resolve(), opts.logger()

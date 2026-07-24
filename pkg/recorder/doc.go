@@ -60,7 +60,7 @@
 //
 // Result is auto-populated from the adapter's OutcomeCapture when it is
 // unset. Adapters own the record call, so handlers usually do not call
-// Record at all - see the adapters/ modules. Handlers override by setting
+// Record at all - see the adapters in pkg/event. Handlers override by setting
 // e.Result explicitly - useful for POST-redirect-GET flows where HTTP
 // status is the same on success and failure.
 //
@@ -101,15 +101,15 @@
 //
 // # Adapters and ActorResolver
 //
-// HTTP servers mount an adapter from the adapters/ modules, which installs
+// HTTP servers mount an adapter from pkg/event, which installs
 // a per-request Event and records it once after the handler completes.
 // Each adapter takes an ActorResolver deriving the Actor from session
 // state - the recorder package has no opinion about what a "session" is,
 // so each server wires up a resolver matching its own auth model:
 //
-//	mw := stdlib.New(stdlib.Options{
-//	    Recorder: rec,
-//	    Resolve: func(ctx context.Context) event.Actor {
+//	mw := event.Middleware(event.Options{
+//	    Recorder:      rec,
+//	    ActorResolver: func(ctx context.Context) event.Actor {
 //	        s, ok := session.FromContext(ctx)
 //	        if !ok {
 //	            return event.Actor{Type: "anonymous"}

@@ -37,7 +37,7 @@ import (
 // records it once after the handler chain completes. Handlers reach it
 // with Current(c.Context()).
 //
-// Mount it AFTER any auth middleware, since Resolve typically reads
+// Mount it AFTER any auth middleware, since ActorResolver typically reads
 // session state. If a panic-recovery middleware (such as
 // gofiber/fiber/v3/middleware/recover) is also mounted, put it BEFORE this
 // one (outermost), so a panicking handler still crashes past this

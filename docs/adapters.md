@@ -15,7 +15,7 @@ rest of the event lifecycle.
 | `pkg/event` (fiber) | `github.com/gofiber/fiber/v3` v3.4.0 (v3 today; v2 could be added, see below) | `event.FiberV3Middleware(event.Options{...}) fiber.Handler` | An explicit `completed` flag set after `c.Next()` returns, plus `c.Response().StatusCode()` |
 | `pkg/event` (gRPC) | `google.golang.org/grpc` v1.68.0 | `event.UnaryInterceptor(event.Options{...})` / `event.StreamInterceptor(event.Options{...})` | The error returned by the handler, mapped through the canonical gRPC-to-HTTP status table |
 
-All six mount points share one `event.Options`: `Resolve`
+All six mount points share one `event.Options`: `ActorResolver`
 (`event.ActorResolver`, nil yields an anonymous actor), `Recorder`
 (`event.Recorder`, nil installs the event but does not auto-record), and
 `Logger` (`event.Logger`, nil defaults to `slog.Default()`).
