@@ -16,7 +16,7 @@ import (
 func invoke(t *testing.T, spy *spyRecorder, handler googlegrpc.UnaryHandler) {
 	t.Helper()
 	ic := event.UnaryInterceptor(event.Options{Recorder: spy, Logger: nopLogger{}})
-	info := &googlegrpc.UnaryServerInfo{FullMethod: "/everscribe.v1.Ingest/Record"}
+	info := &googlegrpc.UnaryServerInfo{FullMethod: unaryFullMethod}
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs(
 		"user-agent", "grpc-go/1.68",
 		"x-request-id", "req-abc",
@@ -24,65 +24,77 @@ func invoke(t *testing.T, spy *spyRecorder, handler googlegrpc.UnaryHandler) {
 	_, _ = ic(ctx, struct{}{}, info, handler)
 }
 
-func TestUnary_ActionDefaultsToFullMethod(t *testing.T) {
+const unaryFullMethod = "/everscribe.v1.Ingest/Record"
+
+func TestUnary(t *testing.T) {
 	t.Parallel()
-	spy := &spyRecorder{}
-	invoke(t, spy, func(ctx context.Context, req any) (any, error) { return nil, nil })
+	for _, tc := range []struct {
+		name        string
+		handler     googlegrpc.UnaryHandler
+		wantAction  string
+		wantStatus  string
+		wantCode    int
+		wantMessage any
+		wantMeta    map[string]any
+	}{
+		{
+			// OK is the case native gRPC codes would break: it is code 0,
+			// which omitempty drops on the wire. Action defaults to
+			// info.FullMethod when the handler names nothing.
+			name:       "ok defaults action to full method and records as 200",
+			handler:    func(ctx context.Context, req any) (any, error) { return nil, nil },
+			wantAction: unaryFullMethod, wantStatus: "ok", wantCode: 200,
+		},
+		{
+			name: "permission denied records as 403",
+			handler: func(ctx context.Context, req any) (any, error) {
+				return nil, status.Error(codes.PermissionDenied, "nope")
+			},
+			wantAction: unaryFullMethod, wantStatus: "denied", wantCode: 403, wantMessage: "nope",
+		},
+		{
+			// Coupling point 3: the status comes from the returned error,
+			// which does not exist until every defer in the handler has
+			// run, so a handler-side defer could never observe it - but
+			// its writes to the event must still land.
+			name: "outcome seen after handler defers",
+			handler: func(ctx context.Context, req any) (any, error) {
+				defer func() { event.Current(ctx).WithField("ran", true) }()
+				return nil, status.Error(codes.NotFound, "missing")
+			},
+			wantAction: unaryFullMethod, wantStatus: "error", wantCode: 404, wantMessage: "missing",
+			wantMeta: map[string]any{"ran": true},
+		},
+		{
+			name: "handler can override action",
+			handler: func(ctx context.Context, req any) (any, error) {
+				event.Current(ctx).Action = "user.login"
+				return nil, nil
+			},
+			wantAction: "user.login", wantStatus: "ok", wantCode: 200,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			spy := &spyRecorder{}
+			invoke(t, spy, tc.handler)
 
-	got := spy.events()
-	require.Len(t, got, 1)
-	require.Equal(t, "/everscribe.v1.Ingest/Record", got[0].Action)
-}
+			events := spy.events()
+			require.Len(t, events, 1)
+			got := events[0]
+			require.Equal(t, tc.wantAction, got.Action)
+			require.Equal(t, tc.wantStatus, got.Result.Status)
+			require.Equal(t, tc.wantCode, got.Result.Code)
+			require.Equal(t, tc.wantMessage, got.Result.Message)
+			require.Equal(t, tc.wantMeta, got.Metadata,
+				"handler writes to the event, including from a defer, must reach the recorded copy")
 
-// TestUnary_OKRecordsAs200 is the case native gRPC codes would break: OK is
-// code 0, which omitempty drops on the wire.
-func TestUnary_OKRecordsAs200(t *testing.T) {
-	t.Parallel()
-	spy := &spyRecorder{}
-	invoke(t, spy, func(ctx context.Context, req any) (any, error) { return nil, nil })
-
-	got := spy.events()[0]
-	require.Equal(t, "ok", got.Result.Status)
-	require.Equal(t, 200, got.Result.Code)
-}
-
-func TestUnary_PermissionDeniedRecordsAs403(t *testing.T) {
-	t.Parallel()
-	spy := &spyRecorder{}
-	invoke(t, spy, func(ctx context.Context, req any) (any, error) {
-		return nil, status.Error(codes.PermissionDenied, "nope")
-	})
-
-	got := spy.events()[0]
-	require.Equal(t, "denied", got.Result.Status)
-	require.Equal(t, 403, got.Result.Code)
-	require.Equal(t, "nope", got.Result.Message)
-}
-
-// TestUnary_OutcomeSeenAfterHandlerDefers is coupling point 3. The status
-// comes from the returned error, which does not exist until every defer in
-// the handler has run, so a handler-side defer could never observe it.
-func TestUnary_OutcomeSeenAfterHandlerDefers(t *testing.T) {
-	t.Parallel()
-	spy := &spyRecorder{}
-	invoke(t, spy, func(ctx context.Context, req any) (any, error) {
-		defer func() { event.Current(ctx).WithField("ran", true) }()
-		return nil, status.Error(codes.NotFound, "missing")
-	})
-
-	got := spy.events()[0]
-	require.Equal(t, 404, got.Result.Code)
-	require.Equal(t, true, got.Metadata["ran"], "handler defers still ran before end")
-}
-
-func TestUnary_OriginFromMetadataAndPeer(t *testing.T) {
-	t.Parallel()
-	spy := &spyRecorder{}
-	invoke(t, spy, func(ctx context.Context, req any) (any, error) { return nil, nil })
-
-	got := spy.events()[0]
-	require.Equal(t, "grpc-go/1.68", got.Origin.UserAgent)
-	require.Equal(t, "req-abc", got.Origin.RequestID)
+			// Origin comes from the incoming metadata invoke sets, on
+			// every call regardless of outcome.
+			require.Equal(t, "grpc-go/1.68", got.Origin.UserAgent)
+			require.Equal(t, "req-abc", got.Origin.RequestID)
+		})
+	}
 }
 
 // TestUnary_CloneInsideHandlerStaysUnnamed guards a regression (I5):
@@ -106,16 +118,5 @@ func TestUnary_CloneInsideHandlerStaysUnnamed(t *testing.T) {
 
 	got := spy.events()
 	require.Len(t, got, 1, "only the primary event auto-records")
-	require.Equal(t, "/everscribe.v1.Ingest/Record", got[0].Action)
-}
-
-func TestUnary_HandlerCanOverrideAction(t *testing.T) {
-	t.Parallel()
-	spy := &spyRecorder{}
-	invoke(t, spy, func(ctx context.Context, req any) (any, error) {
-		event.Current(ctx).Action = "user.login"
-		return nil, nil
-	})
-
-	require.Equal(t, "user.login", spy.events()[0].Action)
+	require.Equal(t, unaryFullMethod, got[0].Action)
 }
