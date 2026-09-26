@@ -41,31 +41,45 @@ func TestResultFromHTTPStatus_ZeroIsNoResponseWritten(t *testing.T) {
 	require.Zero(t, got.Code)
 }
 
-func TestOriginFrom_PrefersForwardedFor(t *testing.T) {
+func TestOriginFrom(t *testing.T) {
 	t.Parallel()
-	headers := map[string]string{
-		"X-Forwarded-For": "203.0.113.9, 70.41.3.18",
-		"X-Real-IP":       "198.51.100.7",
-		"User-Agent":      "curl/8.0",
-		"X-Request-ID":    "req-abc",
+	for _, tc := range []struct {
+		name       string
+		headers    map[string]string
+		remoteAddr string
+		want       Origin
+		why        string
+	}{
+		{
+			name: "prefers forwarded for",
+			headers: map[string]string{
+				"X-Forwarded-For": "203.0.113.9, 70.41.3.18",
+				"X-Real-IP":       "198.51.100.7",
+				"User-Agent":      "curl/8.0",
+				"X-Request-ID":    "req-abc",
+			},
+			remoteAddr: "10.0.0.1:54321",
+			want:       Origin{IP: "203.0.113.9", UserAgent: "curl/8.0", RequestID: "req-abc"},
+			why:        "first entry of X-Forwarded-For wins, over X-Real-IP and RemoteAddr",
+		},
+		{
+			name:       "falls back to remote addr",
+			remoteAddr: "10.0.0.1:54321",
+			want:       Origin{IP: "10.0.0.1"},
+			why:        "port is stripped, and no headers means no user agent",
+		},
+		{
+			name: "empty header closure",
+			want: Origin{},
+			why:  "adapters with no headers pass a closure returning empty",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := OriginFrom(func(n string) string { return tc.headers[n] }, tc.remoteAddr)
+			require.Equal(t, tc.want, got, tc.why)
+		})
 	}
-	got := OriginFrom(func(n string) string { return headers[n] }, "10.0.0.1:54321")
-	require.Equal(t, "203.0.113.9", got.IP, "first entry of X-Forwarded-For wins")
-	require.Equal(t, "curl/8.0", got.UserAgent)
-	require.Equal(t, "req-abc", got.RequestID)
-}
-
-func TestOriginFrom_FallsBackToRemoteAddr(t *testing.T) {
-	t.Parallel()
-	got := OriginFrom(func(string) string { return "" }, "10.0.0.1:54321")
-	require.Equal(t, "10.0.0.1", got.IP, "port is stripped")
-	require.Empty(t, got.UserAgent)
-}
-
-func TestOriginFrom_EmptyHeaderClosure(t *testing.T) {
-	t.Parallel()
-	got := OriginFrom(func(string) string { return "" }, "")
-	require.Equal(t, Origin{}, got, "adapters with no headers pass a closure returning empty")
 }
 
 // TestClientIPFrom_PortStripping is the falsification for I2. clientIPFrom
@@ -137,25 +151,60 @@ func TestBegin_StampsKeyOnCurrentNotTemplate(t *testing.T) {
 	require.NotEqual(t, cur.ID, clone.ID)
 }
 
-func TestEnd_SkipsUnnamedEvent(t *testing.T) {
+func TestEnd(t *testing.T) {
 	t.Parallel()
-	rec := &stubRecorder{}
-	_, end := Begin(t.Context(), &Event{}, stubCapture{Result{Status: "ok"}, true}, rec, stubLogger{})
-	end()
-	require.Empty(t, rec.got, "an event the handler never named is not recorded")
-}
+	for _, tc := range []struct {
+		name        string
+		action      string
+		capture     stubCapture
+		endTwice    bool
+		wantEvents  int
+		wantStatus  string
+		wantCode    int
+		wantMessage any
+	}{
+		{
+			// An event the handler never named is not recorded, however
+			// complete the outcome is.
+			name:       "skips unnamed event",
+			capture:    stubCapture{Result{Status: "ok"}, true},
+			wantEvents: 0,
+		},
+		{
+			name:       "records once and applies outcome",
+			action:     "user.login",
+			capture:    stubCapture{Result{Status: "ok", Code: 200}, true},
+			endTwice:   true, // the second end() must be a no-op
+			wantEvents: 1, wantStatus: "ok", wantCode: 200,
+		},
+		{
+			name:       "no outcome yields diagnostic",
+			action:     "user.login",
+			capture:    stubCapture{ok: false},
+			wantEvents: 1, wantStatus: "error", wantMessage: "no response written",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rec := &stubRecorder{}
+			ctx, end := Begin(t.Context(), &Event{}, tc.capture, rec, stubLogger{})
+			if tc.action != "" {
+				Current(ctx).Action = tc.action
+			}
+			end()
+			if tc.endTwice {
+				end()
+			}
 
-func TestEnd_RecordsOnceAndAppliesOutcome(t *testing.T) {
-	t.Parallel()
-	rec := &stubRecorder{}
-	ctx, end := Begin(t.Context(), &Event{}, stubCapture{Result{Status: "ok", Code: 200}, true}, rec, stubLogger{})
-	Current(ctx).Action = "user.login"
-	end()
-	end() // second call must be a no-op
-
-	require.Len(t, rec.got, 1)
-	require.Equal(t, "ok", rec.got[0].Result.Status)
-	require.Equal(t, 200, rec.got[0].Result.Code)
+			require.Len(t, rec.got, tc.wantEvents)
+			if tc.wantEvents == 0 {
+				return
+			}
+			require.Equal(t, tc.wantStatus, rec.got[0].Result.Status)
+			require.Equal(t, tc.wantCode, rec.got[0].Result.Code)
+			require.Equal(t, tc.wantMessage, rec.got[0].Result.Message)
+		})
+	}
 }
 
 // TestEnd_RacesWithPrepareEvent exercises what the recorded flag's CAS
@@ -204,18 +253,6 @@ func TestEnd_RacesWithPrepareEvent(t *testing.T) {
 		}
 	}
 	require.True(t, wonAtLeastOnce, "end must win the race and record at least once across many iterations")
-}
-
-func TestEnd_NoOutcomeYieldsDiagnostic(t *testing.T) {
-	t.Parallel()
-	rec := &stubRecorder{}
-	ctx, end := Begin(t.Context(), &Event{}, stubCapture{ok: false}, rec, stubLogger{})
-	Current(ctx).Action = "user.login"
-	end()
-
-	require.Len(t, rec.got, 1)
-	require.Equal(t, "error", rec.got[0].Result.Status)
-	require.Equal(t, "no response written", rec.got[0].Result.Message)
 }
 
 func TestPrepareEvent_MarksCurrentByPointerIdentity(t *testing.T) {
