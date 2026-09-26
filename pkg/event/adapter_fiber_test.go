@@ -19,97 +19,98 @@ func newApp(spy *spyRecorder, h fiberv3.Handler) *fiberv3.App {
 	return app
 }
 
-func TestFiber_RecordsOnce(t *testing.T) {
+func TestFiber(t *testing.T) {
 	t.Parallel()
-	spy := &spyRecorder{callPrepare: true}
-	app := newApp(spy, func(c fiberv3.Ctx) error {
-		event.Current(c.Context()).Action = "user.login"
-		return c.SendString("ok")
-	})
+	for _, tc := range []struct {
+		name          string
+		handler       fiberv3.Handler
+		reqHeaders    map[string]string
+		wantEvents    int
+		wantAction    string
+		wantStatus    string
+		wantCode      int
+		wantUserAgent string
+		wantRequestID string
+	}{
+		{
+			name: "records once",
+			handler: func(c fiberv3.Ctx) error {
+				event.Current(c.Context()).Action = "user.login"
+				return c.SendString("ok")
+			},
+			wantEvents: 1, wantAction: "user.login", wantStatus: "ok", wantCode: 200,
+		},
+		{
+			name: "denied status",
+			handler: func(c fiberv3.Ctx) error {
+				event.Current(c.Context()).Action = "user.login"
+				return c.Status(http.StatusForbidden).SendString("nope")
+			},
+			wantEvents: 1, wantAction: "user.login", wantStatus: "denied", wantCode: 403,
+		},
+		{
+			// Confirms the c.Get wrapper, since fiber's Get takes
+			// variadic defaults and does not match OriginFrom's closure
+			// signature directly.
+			name: "origin from headers",
+			handler: func(c fiberv3.Ctx) error {
+				event.Current(c.Context()).Action = "user.login"
+				return c.SendString("ok")
+			},
+			reqHeaders:    map[string]string{"User-Agent": "curl/8.0", "X-Request-ID": "req-abc"},
+			wantEvents:    1,
+			wantAction:    "user.login",
+			wantStatus:    "ok",
+			wantCode:      200,
+			wantUserAgent: "curl/8.0",
+			wantRequestID: "req-abc",
+		},
+		{
+			// The opposite of "no write records as ok" below: this one
+			// never names the event at all.
+			name:       "unnamed event not recorded",
+			handler:    func(c fiberv3.Ctx) error { return c.SendString("ok") },
+			wantEvents: 0,
+		},
+		{
+			// A real limitation (see the package doc): fasthttp's
+			// StatusCode() defaults to 200 regardless of whether the
+			// handler wrote anything, so a named event that returns nil
+			// without any Send* call is indistinguishable from one that
+			// wrote 200, and records as such.
+			name: "no write records as ok",
+			handler: func(c fiberv3.Ctx) error {
+				event.Current(c.Context()).Action = "user.login"
+				return nil // no Send*/Status/etc. call
+			},
+			wantEvents: 1, wantAction: "user.login", wantStatus: "ok", wantCode: 200,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			spy := &spyRecorder{callPrepare: true}
+			app := newApp(spy, tc.handler)
 
-	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/", nil))
-	require.NoError(t, err)
-	resp.Body.Close()
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			for k, v := range tc.reqHeaders {
+				req.Header.Set(k, v)
+			}
+			resp, err := app.Test(req)
+			require.NoError(t, err)
+			resp.Body.Close()
 
-	got := spy.events()
-	require.Len(t, got, 1)
-	require.Equal(t, "user.login", got[0].Action)
-	require.Equal(t, "ok", got[0].Result.Status)
-	require.Equal(t, 200, got[0].Result.Code)
-}
-
-func TestFiber_DeniedStatus(t *testing.T) {
-	t.Parallel()
-	spy := &spyRecorder{callPrepare: true}
-	app := newApp(spy, func(c fiberv3.Ctx) error {
-		event.Current(c.Context()).Action = "user.login"
-		return c.Status(http.StatusForbidden).SendString("nope")
-	})
-
-	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/", nil))
-	require.NoError(t, err)
-	resp.Body.Close()
-
-	require.Equal(t, "denied", spy.events()[0].Result.Status)
-}
-
-// TestFiber_OriginFromHeaders confirms the c.Get wrapper, since fiber's
-// Get takes variadic defaults and does not match OriginFrom's closure
-// signature directly.
-func TestFiber_OriginFromHeaders(t *testing.T) {
-	t.Parallel()
-	spy := &spyRecorder{callPrepare: true}
-	app := newApp(spy, func(c fiberv3.Ctx) error {
-		event.Current(c.Context()).Action = "user.login"
-		return c.SendString("ok")
-	})
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("User-Agent", "curl/8.0")
-	req.Header.Set("X-Request-ID", "req-abc")
-	resp, err := app.Test(req)
-	require.NoError(t, err)
-	resp.Body.Close()
-
-	got := spy.events()[0]
-	require.Equal(t, "curl/8.0", got.Origin.UserAgent)
-	require.Equal(t, "req-abc", got.Origin.RequestID)
-}
-
-func TestFiber_UnnamedEventNotRecorded(t *testing.T) {
-	t.Parallel()
-	spy := &spyRecorder{callPrepare: true}
-	app := newApp(spy, func(c fiberv3.Ctx) error { return c.SendString("ok") })
-
-	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/", nil))
-	require.NoError(t, err)
-	resp.Body.Close()
-
-	require.Empty(t, spy.events())
-}
-
-// TestFiber_NoWriteRecordsAsOK documents a real limitation (see the
-// package doc): fasthttp's StatusCode() defaults to 200 regardless of
-// whether the handler wrote anything, so a named event that returns nil
-// without any Send* call is indistinguishable from one that wrote 200,
-// and records as such - the opposite of TestFiber_UnnamedEventNotRecorded,
-// which covers never naming the event at all.
-func TestFiber_NoWriteRecordsAsOK(t *testing.T) {
-	t.Parallel()
-	spy := &spyRecorder{callPrepare: true}
-	app := newApp(spy, func(c fiberv3.Ctx) error {
-		event.Current(c.Context()).Action = "user.login"
-		return nil // no Send*/Status/etc. call
-	})
-
-	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/", nil))
-	require.NoError(t, err)
-	resp.Body.Close()
-
-	got := spy.events()
-	require.Len(t, got, 1)
-	require.Equal(t, "ok", got[0].Result.Status, "fasthttp defaults StatusCode() to 200 with nothing written")
-	require.Equal(t, 200, got[0].Result.Code)
+			got := spy.events()
+			require.Len(t, got, tc.wantEvents)
+			if tc.wantEvents == 0 {
+				return
+			}
+			require.Equal(t, tc.wantAction, got[0].Action)
+			require.Equal(t, tc.wantStatus, got[0].Result.Status)
+			require.Equal(t, tc.wantCode, got[0].Result.Code)
+			require.Equal(t, tc.wantUserAgent, got[0].Origin.UserAgent)
+			require.Equal(t, tc.wantRequestID, got[0].Origin.RequestID)
+		})
+	}
 }
 
 // TestFiber_PanicYieldsNoResponseWritten verifies the completed flag's
