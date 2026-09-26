@@ -56,62 +56,38 @@ func TestNewMinter_ConstructsMinterClient(t *testing.T) {
 	require.NotNil(t, m)
 }
 
-func TestNewFromEnv_Success(t *testing.T) {
-	t.Setenv(envProjectID, "proj_env")
-	t.Setenv(envAPIKey, "evs_env_secret")
+func TestNewFromEnv(t *testing.T) {
+	// No t.Parallel here or in the subtests: t.Setenv panics in a
+	// parallel test.
+	for _, tc := range []struct {
+		name       string
+		projectID  string
+		apiKey     string
+		wantErr    string // substring of the error; empty means success
+		wantProjID string
+		wantAPIKey string
+	}{
+		{"success", "proj_env", "evs_env_secret", "", "proj_env", "evs_env_secret"},
+		{"trims surrounding whitespace", "  proj_env  ", "\tevs_env_secret\n", "", "proj_env", "evs_env_secret"},
+		{"missing project id", "", "evs_env_secret", envProjectID, "", ""},
+		{"whitespace-only project id", "   ", "evs_env_secret", envProjectID, "", ""},
+		{"missing api key", "proj_env", "", envAPIKey, "", ""},
+		{"whitespace-only api key", "proj_env", "  ", envAPIKey, "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(envProjectID, tc.projectID)
+			t.Setenv(envAPIKey, tc.apiKey)
 
-	c, err := NewFromEnv()
-	require.NoError(t, err)
-	require.Equal(t, "proj_env", c.projectID)
-	require.Equal(t, "evs_env_secret", c.apiKey)
-}
-
-func TestNewFromEnv_TrimsValues(t *testing.T) {
-	t.Setenv(envProjectID, "  proj_env  ")
-	t.Setenv(envAPIKey, "\tevs_env_secret\n")
-
-	c, err := NewFromEnv()
-	require.NoError(t, err)
-	require.Equal(t, "proj_env", c.projectID)
-	require.Equal(t, "evs_env_secret", c.apiKey)
-}
-
-func TestNewFromEnv_MissingProjectID(t *testing.T) {
-	t.Setenv(envProjectID, "")
-	t.Setenv(envAPIKey, "evs_env_secret")
-
-	c, err := NewFromEnv()
-	require.Error(t, err)
-	require.Nil(t, c)
-	require.Contains(t, err.Error(), envProjectID)
-}
-
-func TestNewFromEnv_WhitespaceProjectID(t *testing.T) {
-	t.Setenv(envProjectID, "   ")
-	t.Setenv(envAPIKey, "evs_env_secret")
-
-	c, err := NewFromEnv()
-	require.Error(t, err)
-	require.Nil(t, c)
-	require.Contains(t, err.Error(), envProjectID)
-}
-
-func TestNewFromEnv_MissingAPIKey(t *testing.T) {
-	t.Setenv(envProjectID, "proj_env")
-	t.Setenv(envAPIKey, "")
-
-	c, err := NewFromEnv()
-	require.Error(t, err)
-	require.Nil(t, c)
-	require.Contains(t, err.Error(), envAPIKey)
-}
-
-func TestNewFromEnv_WhitespaceAPIKey(t *testing.T) {
-	t.Setenv(envProjectID, "proj_env")
-	t.Setenv(envAPIKey, "  ")
-
-	c, err := NewFromEnv()
-	require.Error(t, err)
-	require.Nil(t, c)
-	require.Contains(t, err.Error(), envAPIKey)
+			c, err := NewFromEnv()
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				require.Nil(t, c)
+				require.Contains(t, err.Error(), tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.wantProjID, c.projectID)
+			require.Equal(t, tc.wantAPIKey, c.apiKey)
+		})
+	}
 }
