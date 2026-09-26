@@ -17,9 +17,9 @@ import (
 // environments override via WithBaseURL.
 const defaultBaseURL = "https://api.everscribe.io"
 
-// HTTPRecorder posts events to the audit-log ingestion API. Implements
-// both Recorder and BatchRecorder - wrapping it in a BufferedRecorder
-// provides asynchronous batched delivery with configurable overflow
+// HTTPRecorder posts events to the audit-log ingestion API. It
+// implements Recorder and BatchRecorder; wrap it in a BufferedRecorder
+// for asynchronous, batched delivery with configurable overflow
 // policies.
 //
 // Wire format:
@@ -70,13 +70,13 @@ func WithBaseURL(url string) HTTPOption {
 }
 
 // WithAutoIdempotencyKey makes the recorder copy Event.ID into
-// Event.IdempotencyKey at send time when IdempotencyKey is empty. This
-// gives in-process safety against double-sends of the same *event.Event
-// without callers having to think about it.
+// Event.IdempotencyKey at send time when IdempotencyKey is empty,
+// giving in-process safety against double-sends without callers having
+// to think about it.
 //
-// Callers who set IdempotencyKey explicitly (e.g., to a webhook event
-// ID for cross-retry idempotency) win - auto-population only fills
-// empty keys. Off by default.
+// Callers who set IdempotencyKey explicitly (e.g. a webhook event ID
+// for cross-retry idempotency) win; auto-population only fills empty
+// keys. Off by default.
 func WithAutoIdempotencyKey() HTTPOption {
 	return func(l *HTTPRecorder) { l.autoIdempotencyKey = true }
 }

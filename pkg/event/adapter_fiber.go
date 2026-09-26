@@ -6,47 +6,44 @@ import (
 
 // FiberV3Middleware is the gofiber/fiber v3 adapter.
 //
-// Fiber is built on fasthttp rather than net/http, so there is no
-// *http.Request to reach for: headers come from c.Get, the remote address
-// from c.RequestCtx().RemoteAddr(), and the status from
-// c.Response().StatusCode(). This is the one adapter where the abstraction
-// leaks, and it is contained here.
+// Fiber is built on fasthttp, not net/http, so there is no *http.Request
+// to reach for: headers come from c.Get, the remote address from
+// c.RequestCtx().RemoteAddr(), and the status from
+// c.Response().StatusCode(). This is the one adapter where the
+// abstraction leaks, contained here.
 //
-// The remote address deliberately goes through RequestCtx().RemoteAddr()
-// rather than the more obvious c.IP(): c.IP() returns a bare IP with no
-// port, but OriginFrom's remoteAddr parameter expects a real host:port pair
-// (it strips a trailing port when present). Passing a bare IPv6 literal
-// there corrupts it - "2001:db8::1" would come back as "2001:db8:" -
-// because the bare address has colons of its own that look like a port
-// separator. RemoteAddr().String() always includes the port (and brackets
-// IPv6 hosts), so it is unambiguous.
+// The remote address goes through RequestCtx().RemoteAddr(), not the more
+// obvious c.IP(): c.IP() returns a bare IP with no port, but OriginFrom's
+// remoteAddr expects a host:port pair and strips a trailing port when
+// present. A bare IPv6 literal would corrupt there - "2001:db8::1" back as
+// "2001:db8:" - since its own colons look like a port separator.
+// RemoteAddr().String() always includes the port (bracketing IPv6), so
+// it's unambiguous.
 //
-// v3 only, for now. In v3, fiber.Ctx satisfies context.Context, but its
-// Value method reads fiber Locals rather than a Go context chain, so
-// this adapter passes c.Context() to the resolver and to Begin, never c
-// itself. Handlers must do the same: Current(c) compiles and returns a
-// throwaway that is never recorded. v2 used
-// c.UserContext() and c.SetUserContext, which v3 renamed (and repurposed
-// Context() / SetContext for the fasthttp-backed context.Context, moving
-// the old fasthttp accessor to RequestCtx()).
+// v3 only, for now. fiber.Ctx satisfies context.Context, but its Value
+// method reads fiber Locals, not a Go context chain, so this adapter
+// passes c.Context() to the resolver and to Begin, never c itself.
+// Handlers must do the same: Current(c) compiles but returns a throwaway
+// that is never recorded. v2 used c.UserContext()/SetUserContext, which
+// v3 renamed to Context()/SetContext (moving the old fasthttp accessor
+// to RequestCtx()).
 //
-// A FiberV2Middleware could live in this same package if wanted:
-// fiber/v2 and fiber/v3 are distinct module paths under semantic import
-// versioning, so one package may import both, and minimal version
-// selection resolves each path independently. The cost is fiber v2's
-// dependency tree joining the module graph.
+// A FiberV2Middleware could live in this same package: fiber/v2 and
+// fiber/v3 are distinct module paths under semantic import versioning, so
+// one package may import both and minimal version selection resolves each
+// independently. The cost is fiber v2's dependency tree joining the
+// module graph.
 //
 // It returns fiber middleware that installs a per-request event and
 // records it once after the handler chain completes. Handlers reach it
 // with Current(c.Context()).
 //
 // Mount it AFTER any auth middleware, since ActorResolver typically reads
-// session state. If a panic-recovery middleware (such as
+// session state. If a panic-recovery middleware (e.g.
 // gofiber/fiber/v3/middleware/recover) is also mounted, put it BEFORE this
 // one (outermost), so a panicking handler still crashes past this
-// middleware's own defer instead of skipping it: the audited event still
-// records with ok == false, and recover then converts the panic into the
-// response.
+// middleware's defer: the event still records with ok == false, and
+// recover then converts the panic into the response.
 func FiberV3Middleware(opts Options) fiberv3.Handler {
 	resolve, logger := opts.resolve(), opts.logger()
 
@@ -71,18 +68,13 @@ func FiberV3Middleware(opts Options) fiberv3.Handler {
 
 // fiberCapture reads fiber's response state.
 //
-// Limitation: fasthttp's Response.StatusCode() defaults to 200 whether or
-// not a handler wrote anything, and fiber keeps no "was anything written"
-// flag on Ctx or on the underlying fasthttp response. So this adapter
-// cannot distinguish "handler returned nil without writing" from "handler
-// wrote a 200" by inspecting the response alone; both look identical at
-// that layer, unlike gin's Writer.Written() or echo's Response().Committed.
-// Completion is instead tracked explicitly: the capture's completed field
-// is set only after c.Next() returns, so a handler that panics never sets
-// it and Outcome reports ok == false, same as an in-flight request. A
-// handler that returns nil having written nothing is indistinguishable
-// from one that wrote 200, and is recorded as ok == true, Result{Code:
-// 200, Status: "ok"}.
+// Limitation: fasthttp's StatusCode() defaults to 200 whether or not a
+// handler wrote anything, and fiber has no "was anything written" flag
+// (unlike gin's Writer.Written() or echo's Response().Committed), so a
+// nil-without-writing handler is indistinguishable from one that wrote
+// 200 and records as ok == true, Result{Code: 200, Status: "ok"}.
+// completed is set only after c.Next() returns, so a panicking handler
+// leaves it false and Outcome reports ok == false, like an in-flight request.
 type fiberCapture struct {
 	c         fiberv3.Ctx
 	completed bool

@@ -6,17 +6,16 @@ import (
 	"net/http"
 )
 
-// Middleware is the net/http adapter. It also covers chi and gorilla/mux,
+// Middleware is the net/http adapter; it also covers chi and gorilla/mux,
 // which are both plain func(http.Handler) http.Handler and need no adapter
 // of their own.
 //
-// It returns middleware that installs a per-request event and records it
-// once after the handler completes. Handlers reach it with
-// Current(r.Context()) and name it by setting Action; an unnamed event is
-// never recorded.
+// It installs a per-request event and records it once after the handler
+// completes. Handlers reach it with Current(r.Context()) and name it by
+// setting Action; an unnamed event is never recorded.
 //
 // Mount it AFTER any auth middleware, since ActorResolver typically reads
-// session state. end is deferred, so it also runs while a panic unwinds.
+// session state; end is deferred, so it also runs while a panic unwinds.
 func Middleware(opts Options) func(http.Handler) http.Handler {
 	resolve, logger := opts.resolve(), opts.logger()
 
@@ -37,15 +36,11 @@ func Middleware(opts Options) func(http.Handler) http.Handler {
 // stdlibResponseWriter captures the final status and doubles as the
 // OutcomeCapture.
 //
-// Embedding http.ResponseWriter only promotes the three methods that
-// interface declares (Header, Write, WriteHeader). It does not make
-// stdlibResponseWriter satisfy http.Flusher, http.Hijacker, or anything
-// else the underlying writer might implement, so a handler behind this
-// middleware that needs SSE (Flusher) or a websocket upgrade (Hijacker)
-// would silently lose that capability. Unwrap lets http.ResponseController
-// reach through to the real writer; Flush and Hijack are explicit
-// passthroughs for callers that type-assert directly instead of going
-// through the controller.
+// Embedding http.ResponseWriter only promotes Header, Write, and
+// WriteHeader - not Flusher or Hijacker, so a handler needing SSE or a
+// websocket upgrade would silently lose that capability without the
+// Unwrap/Flush/Hijack passthroughs below (used by http.ResponseController
+// and direct type-asserters, respectively).
 type stdlibResponseWriter struct {
 	http.ResponseWriter
 	status      int

@@ -513,18 +513,14 @@ func TestBufferedRecorder_ImplementsRecorder(t *testing.T) {
 	var _ Recorder = (*BufferedRecorder)(nil)
 }
 
-// TestBufferedRecorder_DroppedEvent_IsNotMarkedRecorded is the falsification
-// for I3: Record used to call event.PrepareEvent before the overflow-policy
-// switch, so an event dropped under PolicyDropNewest (or PolicyError, or a
-// canceled PolicyBlock) was already marked recorded on the request-scoped
-// event. That marking makes end()'s CompareAndSwap a no-op, so the auto-record
-// backstop never fires and the event is lost entirely, not just delayed.
+// TestBufferedRecorder_DroppedEvent_IsNotMarkedRecorded guards against a
+// regression (I3): Record used to mark the event recorded before the
+// overflow-policy switch, so a dropped event's CompareAndSwap became a
+// no-op and end()'s auto-record backstop never fired, losing it for good.
 //
-// This fills a buffer-size-1 recorder so the request-scoped event is
-// dropped, then calls end() and confirms the event still reaches the inner
-// recorder once the buffer has room. That is only possible if the dropped
-// Record call left the recorded flag untouched, since end() only records
-// when its CompareAndSwap(false, true) succeeds.
+// It fills a buffer-size-1 recorder so the event is dropped, then calls
+// end() and confirms it still reaches the inner recorder once the buffer
+// has room - only possible if the drop left the recorded flag untouched.
 func TestBufferedRecorder_DroppedEvent_IsNotMarkedRecorded(t *testing.T) {
 	t.Parallel()
 	blocker := &blockingRec{release: make(chan struct{})}

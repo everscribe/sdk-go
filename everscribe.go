@@ -71,14 +71,12 @@ func New(projectID, apiKey string) (*Client, error) {
 	return &Client{projectID: projectID, apiKey: apiKey}, nil
 }
 
-// NewFromEnv constructs a Client by reading EVERSCRIBE_PROJECT_ID and
-// EVERSCRIBE_API_KEY from the process environment. Returns an error
-// naming the missing variable if either is unset or empty after
-// trimming.
+// NewFromEnv constructs a Client from EVERSCRIBE_PROJECT_ID and
+// EVERSCRIBE_API_KEY in the process environment, returning an error
+// naming whichever variable is unset or empty after trimming.
 //
-// Use this in 12-factor app bootstraps so credentials never appear in
-// source. For tests and CLIs that pass credentials explicitly, call
-// New directly.
+// Use it in 12-factor bootstraps so credentials stay out of source;
+// call New directly when tests or CLIs pass credentials explicitly.
 func NewFromEnv() (*Client, error) {
 	projectID := strings.TrimSpace(os.Getenv(envProjectID))
 	if projectID == "" {

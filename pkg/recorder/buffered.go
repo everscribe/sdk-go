@@ -120,17 +120,16 @@ func WithSlogLogger(l *slog.Logger) BufferedOption {
 }
 
 // BufferedRecorder wraps another Recorder to add asynchronous batched
-// writes. Events enqueue on an internal channel and a background
-// goroutine flushes them to the inner Recorder when the pending batch
-// reaches the size threshold or the flush interval elapses, whichever
-// comes first.
+// writes. Events enqueue on an internal channel; a background goroutine
+// flushes them to the inner Recorder when the pending batch reaches the
+// size threshold or the flush interval elapses, whichever comes first.
 //
-// BufferedRecorder itself implements Recorder. If the inner Recorder
-// implements BatchRecorder, flush uses RecordBatch for efficiency;
-// otherwise flush loops serial Record calls.
+// BufferedRecorder itself implements Recorder. It uses the inner
+// Recorder's RecordBatch when available, or loops serial Record calls
+// otherwise.
 //
-// Call Close to drain pending events and stop the background goroutine.
-// Close is safe to call multiple times; only the first call has effect.
+// Call Close to drain pending events and stop the background goroutine;
+// only the first call has effect.
 type BufferedRecorder struct {
 	inner  Recorder
 	cfg    bufferedConfig
@@ -178,15 +177,11 @@ func (b *BufferedRecorder) Record(ctx context.Context, e *event.Event) error {
 	default:
 	}
 
-	// PrepareEventFields fills ID, OccurredAt, and Result on e now, so the
-	// copy sent below is fully prepared, but defers the dedupe mark: every
-	// policy below has a path that discards the event instead of enqueuing
-	// it (a canceled or stopped PolicyBlock, a full buffer under
-	// PolicyError or PolicyDropNewest). Marking the request-scoped event
-	// recorded before it actually lands in the buffer would suppress
-	// end()'s auto-record backstop on exactly the events that get dropped,
-	// losing them for good instead of leaving them retryable. mark is only
-	// invoked once a send below has actually succeeded.
+	// PrepareEventFields fills ID, OccurredAt, and Result now, but defers
+	// the dedupe mark: every overflow path below can discard the event
+	// instead of enqueuing it. Marking it recorded before it lands in the
+	// buffer would suppress end()'s auto-record backstop on exactly the
+	// events that get dropped. mark is only invoked after a send succeeds.
 	mark := event.PrepareEventFields(ctx, e)
 
 	switch b.cfg.overflow {
@@ -228,14 +223,14 @@ func (b *BufferedRecorder) Record(ctx context.Context, e *event.Event) error {
 	}
 }
 
-// Flush forces an immediate flush of all events buffered at the time of
-// the call. Blocks until those events have been persisted to the inner
-// Recorder or ctx is canceled. Events enqueued after Flush is called
-// are not guaranteed to be included in the synchronous flush.
+// Flush forces an immediate flush of events buffered at the time of the
+// call, blocking until they're persisted to the inner Recorder or ctx
+// is canceled. Events enqueued after the call are not guaranteed to be
+// included.
 //
-// Returns nil on success, ctx.Err() on cancellation, or the error from
-// the inner Recorder if the flush failed. Calling Flush after Close is
-// a no-op and returns nil.
+// Returns nil on success, ctx.Err() on cancellation, or the inner
+// Recorder's error on flush failure. Calling Flush after Close is a
+// no-op returning nil.
 func (b *BufferedRecorder) Flush(ctx context.Context) error {
 	select {
 	case <-b.stop:

@@ -85,15 +85,12 @@ func TestUnary_OriginFromMetadataAndPeer(t *testing.T) {
 	require.Equal(t, "req-abc", got.Origin.RequestID)
 }
 
-// TestUnary_CloneInsideHandlerStaysUnnamed is the I5 falsification.
-// UnaryInterceptor used to set Action: info.FullMethod on the template
-// passed to Begin, so every event.NewFromContext clone made inside the
-// handler silently inherited the RPC method name instead of coming back
-// unnamed. A secondary event the handler never explicitly named would then
-// get auto-named after the RPC and recorded, rather than being dropped by
-// the empty-Action guard every stock recorder applies
-// (pkg/recorder/http.go, pkg/recorder/buffered.go). The primary
-// request-scoped event must still record under the full method name.
+// TestUnary_CloneInsideHandlerStaysUnnamed guards a regression (I5):
+// UnaryInterceptor used to set Action on the Begin template, so every
+// NewFromContext clone inherited the RPC method name instead of coming
+// back unnamed, and would auto-record instead of being dropped by the
+// empty-Action guard. The primary request-scoped event still must record
+// under the full method name.
 func TestUnary_CloneInsideHandlerStaysUnnamed(t *testing.T) {
 	t.Parallel()
 	spy := &spyRecorder{}

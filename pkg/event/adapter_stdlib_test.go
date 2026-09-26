@@ -97,14 +97,12 @@ func TestDedupe_ManualThenAuto_RecordsOnce(t *testing.T) {
 	require.Len(t, spy.events(), 1, "the flag must suppress the adapter path")
 }
 
-// TestDedupe_CustomRecorderSkippingPrepare_BothCarrySameKey is spec case 3, the
-// belt-and-braces path. A custom recorder never calls PrepareEvent, so the flag
-// is never set and both paths submit. The design's guarantee is not that this
-// produces one submission, but that both carry the SAME idempotency key, so the
-// server's ON CONFLICT arbiter absorbs the duplicate instead of colliding on
-// the id primary key.
-//
-// internal/contracttest/dedupe_test.go proves the server half of that claim.
+// TestDedupe_CustomRecorderSkippingPrepare_BothCarrySameKey is spec case 3:
+// a custom recorder that never calls PrepareEvent, so the flag is never set
+// and both paths submit. The guarantee isn't a single submission but that
+// both carry the SAME idempotency key, so the server's ON CONFLICT arbiter
+// absorbs the duplicate instead of colliding on the id primary key.
+// internal/contracttest/dedupe_test.go proves the server half.
 func TestDedupe_CustomRecorderSkippingPrepare_BothCarrySameKey(t *testing.T) {
 	t.Parallel()
 	spy := &spyRecorder{callPrepare: false} // the custom recorder
@@ -228,14 +226,12 @@ func TestClientDisconnect_StillRecords(t *testing.T) {
 	}
 }
 
-// TestMidHandlerRecord_DoesNotStampNoResponseWritten is the falsification for
-// C1. PrepareEvent used to run applyOutcome's ok == false fallback
-// unconditionally, so a NewFromContext clone recorded before the response is
-// written - the pattern pkg/recorder/doc.go recommends for multiple events
-// per handler - got a false "no response written" error baked into an
-// immutable audit record, even though the handler simply had not written a
-// response YET, not because it never would. That sentinel must be reserved
-// for end(), which runs after the handler has genuinely finished.
+// TestMidHandlerRecord_DoesNotStampNoResponseWritten guards a regression
+// (C1): PrepareEvent used to run applyOutcome's ok == false fallback
+// unconditionally, so a mid-handler NewFromContext clone (the pattern
+// pkg/recorder/doc.go recommends) got a false "no response written" error
+// baked in, even though the handler just hadn't responded YET. That
+// sentinel is reserved for end(), which runs after the handler finishes.
 func TestMidHandlerRecord_DoesNotStampNoResponseWritten(t *testing.T) {
 	t.Parallel()
 	spy := &spyRecorder{callPrepare: true}
@@ -353,16 +349,14 @@ func TestFlagUnderContention(t *testing.T) {
 	require.Empty(t, spy.events(), "every PrepareEvent marked it; end must skip")
 }
 
-// TestFlush_SupportsServerSentEvents is the I4 falsification. stdlibResponseWriter
-// embeds http.ResponseWriter with no Unwrap, Flush, or Hijack, so
-// http.ResponseController and direct http.Flusher type assertions both stop
-// working behind this middleware, breaking SSE and any other handler that
-// needs to push a partial response before it finishes.
+// TestFlush_SupportsServerSentEvents guards a regression (I4):
+// stdlibResponseWriter embedding http.ResponseWriter with no Unwrap,
+// Flush, or Hijack breaks http.ResponseController and direct Flusher
+// assertions, breaking SSE and any handler that pushes partial responses.
 //
-// The handler writes a first chunk, flushes it explicitly, then blocks on
-// release before writing a second chunk. Without a working Flush the first
-// chunk sits in net/http's own write buffer until the handler returns, so
-// the client would never observe it before release is closed.
+// It flushes a first chunk, then blocks before a second; without a
+// working Flush the first chunk sits in net/http's write buffer until
+// the handler returns, so the client would never see it before release.
 func TestFlush_SupportsServerSentEvents(t *testing.T) {
 	t.Parallel()
 	spy := &spyRecorder{callPrepare: true}

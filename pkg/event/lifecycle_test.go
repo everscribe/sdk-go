@@ -158,33 +158,18 @@ func TestEnd_RecordsOnceAndAppliesOutcome(t *testing.T) {
 	require.Equal(t, 200, rec.got[0].Result.Code)
 }
 
-// TestEnd_RacesWithPrepareEvent exercises the actual scenario the recorded
-// flag's atomic.Bool/CompareAndSwap pair exists for: two library code paths
-// writing the flag concurrently, not a single caller misusing end(). One
-// goroutine calls the automatic path (end); a second goroutine calls the
-// manual path's claim step (PrepareEvent). A third goroutine calls end again
-// concurrently too, because racing a single end() against a single
-// PrepareEvent call cannot, by construction, distinguish a correct
-// CompareAndSwap from a naive load-then-store: PrepareEvent never performs a
-// check-then-act on the flag (it unconditionally Stores when it owns the
-// current event), so there is only ever one checker in that pairing and no
-// checker can race itself. The regression this test must catch, two
-// concurrent end() calls both winning, requires two checkers.
+// TestEnd_RacesWithPrepareEvent exercises what the recorded flag's CAS
+// actually guards: two concurrent writers (an automatic end() and a
+// manual PrepareEvent claim), not a single misused end(). A third
+// goroutine also races end(), since one end() vs one PrepareEvent can't
+// distinguish a correct CAS from a naive load-then-store - two checkers
+// are needed to catch both end() calls winning.
 //
-// Result is preset below so every goroutine's applyOutcome call is a pure
-// read (the "already set" branch), not a write, keeping the race isolated to
-// the recorded flag itself rather than tripping an unrelated, already-known
-// data race on Event.Result when two callers populate the same outcome
-// concurrently.
-//
-// Invariant: end() must never record more than once, no matter how many
-// goroutines race the flag. It is not always exactly one, because when
-// PrepareEvent's claim lands before either end() call's CompareAndSwap, both
-// end() calls correctly back off and zero records land here; per the design,
-// the manual caller who won that claim is the one responsible for recording,
-// through a separate call this test does not simulate. Across many
-// iterations the loop also confirms end() does win and record at least once,
-// so the assertion is not vacuously true.
+// Result is preset so applyOutcome is a pure read, isolating the race to
+// the flag. Invariant: end() never records more than once, though not
+// always exactly once (a winning PrepareEvent claim makes both end()
+// calls back off) - many iterations confirm end() also wins at least
+// once, so the assertion isn't vacuous.
 func TestEnd_RacesWithPrepareEvent(t *testing.T) {
 	t.Parallel()
 

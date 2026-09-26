@@ -18,15 +18,13 @@ import (
 // UnaryInterceptor returns a grpc.UnaryServerInterceptor that installs a
 // per-request event and records it once after the handler returns.
 //
-// Recording after handler() returns is the only point at which the outcome
-// is knowable: the status derives from the error the handler returns, which
-// does not exist until every defer inside that handler has run. A
+// Recording after handler() returns is the only point the outcome is
+// knowable: the status derives from the error the handler returns, which
+// doesn't exist until every defer inside that handler has run - a
 // handler-side defer could never observe it.
 //
-// Action defaults to info.FullMethod, for example
-// "/everscribe.v1.Ingest/Record". Handlers may overwrite it.
-//
-// Mount with grpc.ChainUnaryInterceptor.
+// Action defaults to info.FullMethod (e.g. "/everscribe.v1.Ingest/Record");
+// handlers may overwrite it. Mount with grpc.ChainUnaryInterceptor.
 func UnaryInterceptor(opts Options) googlegrpc.UnaryServerInterceptor {
 	resolve, logger := opts.resolve(), opts.logger()
 
@@ -53,16 +51,14 @@ func UnaryInterceptor(opts Options) googlegrpc.UnaryServerInterceptor {
 
 // StreamInterceptor returns a grpc.StreamServerInterceptor.
 //
-// One event per stream, not one per message, recorded at stream close.
-// OccurredAt is stamped at close rather than open: the poll endpoint
-// filters occurred_at > since, so a stream open for an hour would record
-// with an hour-old timestamp, land behind the caller's cursor, and never
-// surface in the live tail.
+// One event per stream, not per message, recorded at stream close.
+// OccurredAt is stamped at close, not open: the poll endpoint filters
+// occurred_at > since, so an hour-long stream stamped at open would land
+// behind the caller's cursor and never surface in the live tail.
 //
-// Shutdown needs no special handling. GracefulStop waits for in-flight
-// RPCs, so those streams finish and record through the ordinary path;
-// Stop terminates them and the handler returns an error, which also
-// records through the ordinary path.
+// Shutdown needs no special handling: GracefulStop waits for in-flight
+// RPCs to finish and record normally; Stop terminates them and the
+// handler's returned error also records normally.
 func StreamInterceptor(opts Options) googlegrpc.StreamServerInterceptor {
 	resolve, logger := opts.resolve(), opts.logger()
 

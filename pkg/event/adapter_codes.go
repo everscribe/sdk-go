@@ -9,16 +9,15 @@ import (
 // HTTPStatusFor maps a gRPC status code to its canonical HTTP equivalent,
 // following the grpc-gateway / Google API design guide mapping.
 //
-// Result.Code carries this rather than the native gRPC code, deliberately.
-// Native codes break three things: code 0 (OK) is dropped by omitempty in
-// every SDK and stored as JSONB, so result.code never matches a successful
-// gRPC call; result.code >= 400 matches no gRPC error at all, since native
-// codes are 1 through 16; and the NLP query layer's priors map "forbidden"
-// to 403.
+// Result.Code deliberately carries this instead of the native gRPC code:
+// native codes break three things - code 0 (OK) is dropped by omitempty
+// and stored as JSONB, so result.code never matches a successful gRPC
+// call; result.code >= 400 matches no gRPC error, since native codes run
+// 1 through 16; and the NLP query layer's priors map "forbidden" to 403.
 //
-// The cost is accepted: InvalidArgument, FailedPrecondition, and OutOfRange
-// all collapse to 400, so the exact gRPC code is not recoverable from the
-// event. The full status message is preserved in Result.Message.
+// The cost: InvalidArgument, FailedPrecondition, and OutOfRange all
+// collapse to 400, so the exact gRPC code isn't recoverable from the
+// event - the full status message is preserved in Result.Message.
 func HTTPStatusFor(c codes.Code) int {
 	switch c {
 	case codes.OK:

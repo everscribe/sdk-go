@@ -88,16 +88,12 @@ func TestFiber_UnnamedEventNotRecorded(t *testing.T) {
 	require.Empty(t, spy.events())
 }
 
-// TestFiber_NoWriteRecordsAsOK documents a real limitation of this
-// adapter, called out in the package doc comment: fasthttp's
-// Response().StatusCode() defaults to 200 regardless of whether the
-// handler wrote anything, and fiber keeps no separate "was written" flag
-// (unlike gin's Writer.Written() or echo's Response().Committed). A
-// handler that names the event and returns nil without calling any Send*
-// method is therefore indistinguishable from one that actually wrote a
-// 200, and is recorded as such. This is the opposite of
-// TestFiber_UnnamedEventNotRecorded, which covers the (distinguishable)
-// case of never naming the event at all.
+// TestFiber_NoWriteRecordsAsOK documents a real limitation (see the
+// package doc): fasthttp's StatusCode() defaults to 200 regardless of
+// whether the handler wrote anything, so a named event that returns nil
+// without any Send* call is indistinguishable from one that wrote 200,
+// and records as such - the opposite of TestFiber_UnnamedEventNotRecorded,
+// which covers never naming the event at all.
 func TestFiber_NoWriteRecordsAsOK(t *testing.T) {
 	t.Parallel()
 	spy := &spyRecorder{callPrepare: true}
@@ -117,23 +113,17 @@ func TestFiber_NoWriteRecordsAsOK(t *testing.T) {
 }
 
 // TestFiber_PanicYieldsNoResponseWritten verifies the completed flag's
-// entire reason for existing: a handler that panics must not be recorded
-// as a successful 200, even though fasthttp's Response().StatusCode()
-// would report exactly that if read unconditionally.
+// reason for existing: a panicking handler must not be recorded as a
+// successful 200, even though StatusCode() would report that if read
+// unconditionally.
 //
-// A raw panic with nothing downstream to recover it does not merely fail
-// the request: fasthttp's own request-handling goroutine has no recover of
-// its own (confirmed by reading valyala/fasthttp v1.72.0's server.go and
-// workerpool.go, and by direct reproduction, which crashed the whole
-// process, not just the request). So this test mounts fiber's own
-// middleware/recover BEFORE (outer to) event.FiberV3Middleware, which is
-// what a real application needs to do regardless of this SDK to avoid a
-// panicking handler taking down the whole server. That still exercises the
-// case that matters here: the panic unwinds through this middleware's own
-// defer end() before it reaches recover's defer, so completed is still
-// false at that point and the audited event captures ok == false, i.e.
-// Result{Status: "error", Message: "no response written"}, regardless of
-// the 500 that recover's own error handler goes on to write afterward.
+// fasthttp's request goroutine has no recover of its own (confirmed
+// against valyala/fasthttp v1.72.0's server.go/workerpool.go, and by
+// direct reproduction, which crashed the process). This test mounts
+// fiber's middleware/recover BEFORE (outer to) FiberV3Middleware, as a
+// real app must too; the panic still unwinds through this middleware's
+// defer end() before recover's, so completed stays false and the event
+// captures ok == false regardless of the 500 recover writes afterward.
 func TestFiber_PanicYieldsNoResponseWritten(t *testing.T) {
 	t.Parallel()
 	spy := &spyRecorder{callPrepare: true}

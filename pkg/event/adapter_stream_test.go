@@ -62,13 +62,12 @@ func TestStream_OneEventPerStreamNotPerMessage(t *testing.T) {
 }
 
 // TestStream_OccurredAtStampedAtCloseNotOpen is the critical case: the
-// server's live tail filters occurred_at > since, so a long-lived stream
-// stamped at open would land behind the caller's cursor and never surface.
+// server's live tail filters occurred_at > since, so a stream stamped at
+// open would land behind the caller's cursor and never surface.
 //
-// The handler sleeps for a measurable interval so the test is genuinely
-// falsifiable: if the stamp happened at stream open (before the sleep),
-// OccurredAt would land only microseconds after `before`, well short of
-// `sleep`. Only a close-time stamp lands at or after `before + sleep`.
+// The handler sleeps for a measurable interval so an open-time stamp
+// (landing only microseconds after `before`) is distinguishable from a
+// close-time one (landing at or after `before + sleep`).
 func TestStream_OccurredAtStampedAtCloseNotOpen(t *testing.T) {
 	t.Parallel()
 	spy := &spyRecorder{}

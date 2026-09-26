@@ -3,14 +3,13 @@ package event
 import "encoding/json"
 
 // Result captures the outcome of the audited action. An empty Status
-// means "unrecorded"; Recorder implementations may populate from HTTP
-// status at record time if e.Result is unset.
+// means "unrecorded"; Recorder implementations may populate it from the
+// HTTP status at record time if e.Result is unset.
 //
-// Message accepts any value but special-cases error: passing an error
-// marshals as the result of err.Error() so callers can write
-// Result{Message: err} instead of Result{Message: err.Error()}.
-// Strings marshal as themselves; other types marshal as their default
-// JSON encoding.
+// Message accepts any value but special-cases error: an error marshals
+// as err.Error(), so callers can write Result{Message: err} instead of
+// Result{Message: err.Error()}. Strings marshal as themselves; other
+// types use their default JSON encoding.
 type Result struct {
 	Status  string `json:"status,omitempty"` // "ok" | "error" | "denied"
 	Code    int    `json:"code,omitempty"`   // HTTP status or app-defined code

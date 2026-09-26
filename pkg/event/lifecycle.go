@@ -35,11 +35,10 @@ const recordTimeout = 15 * time.Second
 // requestState is the per-request lifecycle state Begin installs on the
 // context.
 //
-// The recorded flag lives here rather than on Event deliberately:
-// sync/atomic.Bool embeds noCopy, and Event is copied by value in NewFromContext
-// (clone := *tmpl), in BufferedRecorder.Record (b.events <- *e), and in
-// RecordBatch's slice elements, so a flag on Event would fail go vet's
-// copylocks check.
+// The recorded flag lives here, not on Event, because sync/atomic.Bool
+// embeds noCopy and Event is copied by value (NewFromContext's clone,
+// BufferedRecorder.Record's b.events <- *e, RecordBatch's slice elements) -
+// a flag on Event would fail go vet's copylocks check.
 type requestState struct {
 	current  *Event
 	capture  OutcomeCapture
@@ -51,19 +50,17 @@ type requestState struct {
 type requestStateKey struct{}
 
 // Begin installs the request-scoped template, capture, and recorder, and
-// returns a context plus an end func. Adapters call end exactly once, after
-// the handler completes.
+// returns a context plus an end func; adapters call end exactly once
+// after the handler completes.
 //
-// Begin stamps IdempotencyKey = ID on the request-scoped event, unconditionally
-// and never on the template. Both the manual and the auto-record path must
-// submit the same key for the server's ON CONFLICT arbiter to absorb a
-// duplicate; stamping in end would key only the second submission, which
-// collides on the id primary key instead. Caller-supplied keys still win by
-// ordering, since the handler runs after Begin and simply overwrites.
-//
-// Clones from NewFromContext deliberately do not inherit the key: they come from
-// the template, which is left unstamped. Distinct IDs sharing one key would be
-// silently deduped against each other.
+// Begin stamps IdempotencyKey = ID on the request-scoped event only, never
+// the template, so both the manual and auto-record paths submit the same
+// key and the server's ON CONFLICT arbiter absorbs the duplicate; stamping
+// in end would key only the second submission and collide on the id
+// primary key instead. Caller-supplied keys still win since the handler
+// runs after Begin and overwrites. NewFromContext clones don't inherit the
+// key (they come from the unstamped template), since distinct IDs sharing
+// one key would be silently deduped against each other.
 func Begin(ctx context.Context, tmpl *Event, capture OutcomeCapture, rec Recorder, log Logger) (context.Context, func()) {
 	if tmpl == nil {
 		tmpl = &Event{}
@@ -80,25 +77,23 @@ func Begin(ctx context.Context, tmpl *Event, capture OutcomeCapture, rec Recorde
 }
 
 // Current returns the request-scoped mutable event installed by Begin: the
-// event the adapter will auto-record. Handlers recording several events per
-// request use NewFromContext instead, which returns a clone with a fresh ID.
-// If no adapter installed one (no Begin has run on this context), Current
-// returns a throwaway *Event{} - the same "no template present" fallback
-// NewFromContext documents, so calling it outside a lifecycle is harmless but
-// its return value is never recorded.
+// event the adapter will auto-record. Handlers recording several events
+// per request use NewFromContext instead, which returns a clone with a
+// fresh ID. With no adapter installed (no Begin has run on this context),
+// Current returns a throwaway *Event{} - the same "no template present"
+// fallback NewFromContext documents - so calling it outside a lifecycle is
+// harmless but its return value is never recorded.
 //
-// The concurrency contract covers all access to the returned event, not just
-// field assignment: only the request goroutine may touch it, including
-// handing it to a recorder. Record itself mutates the event, not just reads
-// it, so this is not a theoretical concern: PrepareEvent writes ID,
-// OccurredAt, and Result, and the HTTP recorder then writes IdempotencyKey
-// on top of that. Record also marshals every field to build the request
-// body. A second goroutine calling Record on this same event, even read-only
-// as far as its own code is concerned, races both of those writes and the
-// marshaling, regardless of the recorded flag; the flag deduplicates
-// submissions, it does not make the event itself safe for concurrent Record
-// calls. Pass the result of NewFromContext, not Current, to any code that
-// records outside the request goroutine.
+// The concurrency contract covers all access to the event, not just field
+// assignment: only the request goroutine may touch it, including handing
+// it to a recorder. This is not theoretical - Record mutates the event
+// (PrepareEvent writes ID, OccurredAt, and Result; the HTTP recorder then
+// writes IdempotencyKey) and marshals every field to build the request
+// body. A second goroutine calling Record on this event, even read-only
+// in its own code, races those writes and the marshaling regardless of
+// the recorded flag - the flag dedupes submissions, it does not make the
+// event safe for concurrent Record calls. Pass NewFromContext's result,
+// not Current's, to any code that records outside the request goroutine.
 func Current(ctx context.Context) *Event {
 	st, _ := ctx.Value(requestStateKey{}).(*requestState)
 	if st == nil {
@@ -131,16 +126,13 @@ func (st *requestState) end(ctx context.Context) {
 	}
 }
 
-// applyOutcome fills Result from the capture when the handler has not set
-// one. final distinguishes end(), which runs after the handler has
-// genuinely completed and is guaranteed to be the last word on the
-// event's outcome, from PrepareEvent, which can run mid-handler (see the
-// multiple-events-per-handler pattern in pkg/recorder/doc.go). Only a
-// final caller may stamp the "no response written" sentinel when the
-// capture reports ok == false: from PrepareEvent, ok == false just means
-// "nothing written yet", not "nothing ever will be", and stamping the
-// sentinel there would bake a false error into an event recorded before
-// the response.
+// applyOutcome fills Result from the capture when the handler hasn't set
+// one. final distinguishes end() (guaranteed last word on the outcome)
+// from PrepareEvent (can run mid-handler): only a final caller may stamp
+// the "no response written" sentinel on ok == false, since from
+// PrepareEvent that only means "nothing written yet", not "never will
+// be" - stamping it there would bake a false error into an event
+// recorded before the response.
 func applyOutcome(st *requestState, e *Event, final bool) {
 	if e.Result.Status != "" || st.capture == nil {
 		return

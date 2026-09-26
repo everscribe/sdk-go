@@ -83,13 +83,13 @@ func New(action string) *Event {
 }
 
 // NewFromContext returns a fresh Event pre-populated from the request-scoped
-// template installed by an adapter's Begin call. If no template is present
-// (no adapter mounted, or called outside the request path), returns a
-// minimal Event equivalent to New("").
+// template installed by an adapter's Begin call, or a minimal Event
+// equivalent to New("") when no template is present (no adapter mounted, or
+// called outside the request path).
 //
-// Each call returns an independent Event - mutating the returned value
-// does not affect other events derived from the same context. Handlers
-// that record multiple events per request call NewFromContext once per event.
+// Each call is independent - mutating the result does not affect other
+// events from the same context - so handlers recording multiple events per
+// request call this once per event.
 func NewFromContext(ctx context.Context) *Event {
 	tmpl, ok := ctx.Value(eventTemplateKey{}).(*Event)
 	if !ok || tmpl == nil {
@@ -145,10 +145,9 @@ type eventDiffConfig struct {
 	redactPaths []string
 }
 
-// WithRedactedFields replaces the values at the given JSON pointer
-// paths (RFC 6901) with "[REDACTED]" in both before and after before
-// they leave the process. Use for fields that must not appear in audit
-// logs: password hashes, API keys, PII.
+// WithRedactedFields replaces the values at the given JSON pointer paths
+// (RFC 6901) with "[REDACTED]" in both before and after, for fields that
+// must not appear in audit logs: password hashes, API keys, PII.
 //
 //	e.Diff(before, after,
 //	    event.WithRedactedFields("/password_hash", "/api_keys/0"),
@@ -159,14 +158,14 @@ func WithRedactedFields(paths ...string) EventDiffOption {
 	return func(c *eventDiffConfig) { c.redactPaths = paths }
 }
 
-// Diff records a state transition for mutation events. Both before and
-// after are JSON-marshaled and stored on the Event so the audit UI can
-// render a diff. The server computes the patch on ingest.
+// Diff records a state transition for mutation events: before and after
+// are JSON-marshaled and stored on the Event so the audit UI can render
+// a diff, with the patch computed server-side on ingest.
 //
 // Pass WithRedactedFields to scrub sensitive paths before marshaling.
 //
 // Returns the receiver for chaining. Marshal errors are silently
-// ignored; the Change is left unset so the caller's audit event still
+// ignored, leaving Change unset so the caller's audit event still
 // records.
 func (e *Event) Diff(before, after any, opts ...EventDiffOption) *Event {
 	cfg := eventDiffConfig{}
@@ -200,39 +199,36 @@ func (e *Event) RawDiff(before, after, patch json.RawMessage) *Event {
 	return e
 }
 
-// PrepareEvent fills defaults on e: ID if empty, OccurredAt if zero,
-// and Result auto-captured from the in-scope outcome capture when Result
-// is unset. Recorder implementations call this on each Event before
-// persisting so handlers can rely on auto-populated fields.
+// PrepareEvent fills defaults on e: ID if empty, OccurredAt if zero, and
+// Result auto-captured from the in-scope outcome capture when unset.
+// Recorder implementations call this on each Event before persisting.
 //
-// Result population here is never final: PrepareEvent can run mid-handler
-// (see the multiple-events-per-handler pattern in pkg/recorder/doc.go), so
-// when the capture reports ok == false it leaves Result untouched instead
-// of stamping the "no response written" sentinel. From here, ok == false
-// only means "nothing written yet", not "nothing ever will be" - that
-// sentinel is end()'s to stamp, since only end() runs after the handler
-// has genuinely finished.
+// Result population is never final: PrepareEvent can run mid-handler (see
+// the multiple-events-per-handler pattern in pkg/recorder/doc.go), so when
+// the capture reports ok == false it leaves Result untouched rather than
+// stamping the "no response written" sentinel. Here, ok == false only means
+// "nothing written yet", not "nothing ever will be" - only end() stamps
+// that sentinel, since only end() runs after the handler has finished.
 //
-// It also has a dedupe side effect, which is not obvious from the name:
-// when e is the request-scoped event installed by Begin, PrepareEvent marks
-// it recorded so the adapter's end does not submit it a second time. This
-// only records that a submission happened; it cannot abort one, so a
-// recorder that might still discard e after this call (for example a
-// buffered recorder whose overflow policy drops the event) must not call
-// PrepareEvent directly, since the mark cannot be undone once the event is
-// lost. Use PrepareEventFields instead and only invoke the returned mark
-// func once the event has actually been accepted.
+// It also has a dedupe side effect: when e is the request-scoped event
+// installed by Begin, PrepareEvent marks it recorded so end() does not
+// submit it a second time. This only records that a submission happened -
+// it cannot abort one - so a recorder that might still discard e afterward
+// (e.g. a buffered recorder whose overflow policy drops the event) must not
+// call PrepareEvent directly, since the mark can't be undone once the event
+// is lost. Use PrepareEventFields instead and invoke the returned mark func
+// only once the event is actually accepted.
 func PrepareEvent(ctx context.Context, e *Event) {
 	mark := PrepareEventFields(ctx, e)
 	mark()
 }
 
 // PrepareEventFields performs the same field population as PrepareEvent
-// (ID, OccurredAt, Result) but defers the dedupe mark: it returns a func
-// that must be called once the caller has committed to actually recording
-// e. Skipping the returned func leaves the request-scoped event eligible
-// for end()'s auto-record backstop, which is what lets a recorder abandon
-// a dropped event correctly instead of losing it silently.
+// (ID, OccurredAt, Result) but defers the dedupe mark: the returned func
+// must be called once the caller has committed to recording e. Skipping
+// it leaves the request-scoped event eligible for end()'s auto-record
+// backstop, letting a recorder abandon a dropped event without losing it
+// silently.
 //
 // The returned func is a no-op when e is not the request-scoped event
 // installed by Begin - pointer identity, not ID equality, since

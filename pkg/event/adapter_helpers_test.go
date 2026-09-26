@@ -9,14 +9,11 @@ import (
 
 // spyRecorder captures what the lifecycle submits.
 //
-// callPrepare models the difference that drives the whole dedupe design: the
-// stock recorders call event.PrepareEvent (HTTPRecorder at http.go:105,
-// BufferedRecorder at buffered.go:180), but a custom Recorder is free not to,
-// which is the case the idempotency key exists to cover. The gRPC adapter
-// tests only ever construct spyRecorder{} (callPrepare left at its zero
-// value, false): end() already applies the outcome and marks the event
-// recorded before calling Record, so whether the spy also calls PrepareEvent
-// itself has no observable effect on those tests.
+// callPrepare models whether the recorder calls event.PrepareEvent (as
+// http.go's HTTPRecorder and buffered.go's BufferedRecorder do) or skips
+// it, the case idempotency keys exist to cover. gRPC adapter tests leave
+// it false since end() already applies the outcome and marks the event
+// recorded before calling Record, so PrepareEvent there has no effect.
 type spyRecorder struct {
 	mu          sync.Mutex
 	got         []event.Event
