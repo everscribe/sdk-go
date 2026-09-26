@@ -291,90 +291,90 @@ func TestBufferedRecorder_FlushAfterClose_IsNoOp(t *testing.T) {
 	require.NoError(t, b.Flush(t.Context()))
 }
 
-func TestBufferedRecorder_OverflowPolicyDropNewest_CountsDrops(t *testing.T) {
+func TestBufferedRecorder_OverflowPolicy(t *testing.T) {
 	t.Parallel()
-	blocker := &blockingRec{release: make(chan struct{})}
-	defer close(blocker.release)
+	for _, tc := range []struct {
+		name           string
+		opts           []BufferedOption // nil exercises the default policy
+		overflowCtxTTL time.Duration    // 0 means t.Context()
+		extraOverflows int
+		wantErr        error
+		wantDropped    bool
+	}{
+		{
+			name:           "drop newest counts drops",
+			opts:           []BufferedOption{WithOverflowPolicy(PolicyDropNewest)},
+			extraOverflows: 5, // repeated overflow must keep returning nil
+			wantDropped:    true,
+		},
+		{
+			name:    "error returns ErrBufferFull",
+			opts:    []BufferedOption{WithOverflowPolicy(PolicyError)},
+			wantErr: ErrBufferFull,
+		},
+		{
+			name:           "block respects ctx cancel",
+			opts:           []BufferedOption{WithOverflowPolicy(PolicyBlock)},
+			overflowCtxTTL: 50 * time.Millisecond,
+			wantErr:        context.DeadlineExceeded,
+		},
+		{
+			// No WithOverflowPolicy: overflow must return nil (not
+			// ErrBufferFull) and increment dropped.
+			name:        "default policy is drop newest",
+			wantDropped: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			blocker := &blockingRec{release: make(chan struct{})}
+			defer close(blocker.release)
 
-	b := NewBufferedRecorder(blocker,
-		WithBufferSize(1),
-		WithFlushSize(1),
-		WithFlushInterval(time.Hour),
-		WithOverflowPolicy(PolicyDropNewest),
-		WithSlogLogger(silentLogger()),
-	)
-	t.Cleanup(func() { _ = b.Close() })
+			opts := append([]BufferedOption{
+				WithBufferSize(1),
+				WithFlushSize(1),
+				WithFlushInterval(time.Hour),
+				WithSlogLogger(silentLogger()),
+			}, tc.opts...)
+			b := NewBufferedRecorder(blocker, opts...)
+			t.Cleanup(func() { _ = b.Close() })
 
-	// First Record fills buffer; background goroutine pulls it and blocks
-	// inside inner.Record. Subsequent records find the buffer full.
-	require.NoError(t, b.Record(t.Context(), event.New("a.one")))
-	// Give the goroutine time to pick up the first event.
-	require.Eventually(t, func() bool {
-		blocker.mu.Lock()
-		defer blocker.mu.Unlock()
-		return blocker.calls == 1
-	}, time.Second, 5*time.Millisecond)
+			// The first Record fills the buffer; the background goroutine
+			// pulls it and blocks inside inner.Record, so the next one
+			// occupies the single slot and everything after it overflows.
+			require.NoError(t, b.Record(t.Context(), event.New("a.one")))
+			require.Eventually(t, func() bool {
+				_, calls := blocker.snapshot()
+				return calls == 1
+			}, time.Second, 5*time.Millisecond)
+			require.NoError(t, b.Record(t.Context(), event.New("a.two"))) // fills buffer
 
-	// Now fill the buffer again and try to push - these should drop.
-	require.NoError(t, b.Record(t.Context(), event.New("a.two")))
-	for i := 0; i < 5; i++ {
-		require.NoError(t, b.Record(t.Context(), event.New("dropped")))
+			ctx := t.Context()
+			if tc.overflowCtxTTL > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, tc.overflowCtxTTL)
+				defer cancel()
+			}
+
+			err := b.Record(ctx, event.New("a.three")) // overflow
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+			} else {
+				require.NoError(t, err, "this policy must not return ErrBufferFull")
+			}
+			for i := 0; i < tc.extraOverflows; i++ {
+				require.NoError(t, b.Record(t.Context(), event.New("dropped")))
+			}
+
+			if tc.wantDropped {
+				require.Eventually(t, func() bool {
+					return b.Stats().Dropped >= 1
+				}, time.Second, 5*time.Millisecond)
+				return
+			}
+			require.Zero(t, b.Stats().Dropped, "only the drop-newest policy counts drops")
+		})
 	}
-	require.GreaterOrEqual(t, b.Stats().Dropped, int64(1))
-}
-
-func TestBufferedRecorder_OverflowPolicyError_ReturnsErrBufferFull(t *testing.T) {
-	t.Parallel()
-	blocker := &blockingRec{release: make(chan struct{})}
-	defer close(blocker.release)
-
-	b := NewBufferedRecorder(blocker,
-		WithBufferSize(1),
-		WithFlushSize(1),
-		WithFlushInterval(time.Hour),
-		WithOverflowPolicy(PolicyError),
-		WithSlogLogger(silentLogger()),
-	)
-	t.Cleanup(func() { _ = b.Close() })
-
-	require.NoError(t, b.Record(t.Context(), event.New("a.one")))
-	require.Eventually(t, func() bool {
-		blocker.mu.Lock()
-		defer blocker.mu.Unlock()
-		return blocker.calls == 1
-	}, time.Second, 5*time.Millisecond)
-
-	require.NoError(t, b.Record(t.Context(), event.New("a.two"))) // fills buffer
-	err := b.Record(t.Context(), event.New("a.three"))            // overflow
-	require.ErrorIs(t, err, ErrBufferFull)
-}
-
-func TestBufferedRecorder_OverflowPolicyBlock_RespectsCtxCancel(t *testing.T) {
-	t.Parallel()
-	blocker := &blockingRec{release: make(chan struct{})}
-	defer close(blocker.release)
-
-	b := NewBufferedRecorder(blocker,
-		WithBufferSize(1),
-		WithFlushSize(1),
-		WithFlushInterval(time.Hour),
-		WithOverflowPolicy(PolicyBlock),
-		WithSlogLogger(silentLogger()),
-	)
-	t.Cleanup(func() { _ = b.Close() })
-
-	require.NoError(t, b.Record(t.Context(), event.New("a.one")))
-	require.Eventually(t, func() bool {
-		blocker.mu.Lock()
-		defer blocker.mu.Unlock()
-		return blocker.calls == 1
-	}, time.Second, 5*time.Millisecond)
-	require.NoError(t, b.Record(t.Context(), event.New("a.two"))) // fills buffer
-
-	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
-	defer cancel()
-	err := b.Record(ctx, event.New("a.three"))
-	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 func TestBufferedRecorder_OverflowPolicyBlock_UnblocksWhenSpaceFrees(t *testing.T) {
@@ -462,37 +462,6 @@ func TestBufferedRecorder_OverflowPolicyBlock_ReturnsNilOnClose(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("PolicyBlock Record should have returned nil when Close fired")
 	}
-}
-
-func TestBufferedRecorder_DefaultOverflowPolicyIsDropNewest(t *testing.T) {
-	t.Parallel()
-	blocker := &blockingRec{release: make(chan struct{})}
-	defer close(blocker.release)
-
-	// No WithOverflowPolicy - should default to PolicyDropNewest.
-	b := NewBufferedRecorder(blocker,
-		WithBufferSize(1),
-		WithFlushSize(1),
-		WithFlushInterval(time.Hour),
-		WithSlogLogger(silentLogger()),
-	)
-	t.Cleanup(func() { _ = b.Close() })
-
-	require.NoError(t, b.Record(t.Context(), event.New("a.one")))
-	require.Eventually(t, func() bool {
-		blocker.mu.Lock()
-		defer blocker.mu.Unlock()
-		return blocker.calls == 1
-	}, time.Second, 5*time.Millisecond)
-	require.NoError(t, b.Record(t.Context(), event.New("a.two"))) // fills buffer
-
-	// Default policy: overflow returns nil (not ErrBufferFull) and
-	// increments dropped.
-	require.NoError(t, b.Record(t.Context(), event.New("a.three")),
-		"default policy must not return ErrBufferFull")
-	require.Eventually(t, func() bool {
-		return b.Stats().Dropped >= 1
-	}, time.Second, 5*time.Millisecond)
 }
 
 func TestBufferedRecorder_Stats_TracksFlushed(t *testing.T) {
