@@ -14,46 +14,72 @@ import (
 
 const testProjectID = "proj_123"
 
-func TestHTTPRecorder_Record_PostsSingleEvent(t *testing.T) {
+func TestHTTPRecorder_Record(t *testing.T) {
 	t.Parallel()
+	for _, tc := range []struct {
+		name        string
+		baseURLPath string // appended to the test server URL
+		event       *event.Event
+		wantHit     bool
+		wantPath    string
+		wantAction  string
+		wantActorID string
+	}{
+		{
+			name:        "posts a single event to the project-scoped path",
+			event:       &event.Event{Action: "user.login", Actor: event.Actor{Type: "user", ID: "u1"}},
+			wantHit:     true,
+			wantPath:    "/v1/projects/" + testProjectID + "/events",
+			wantAction:  "user.login",
+			wantActorID: "u1",
+		},
+		{
+			name:        "trailing slash on the base URL is trimmed",
+			baseURLPath: "/",
+			event:       &event.Event{Action: "user.login"},
+			wantHit:     true,
+			wantPath:    "/v1/projects/" + testProjectID + "/events",
+			wantAction:  "user.login",
+		},
+		{
+			name:    "empty action is a no-op",
+			event:   &event.Event{},
+			wantHit: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	var gotPath, gotAuth, gotContentType string
-	var gotBody event.Event
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		gotAuth = r.Header.Get("Authorization")
-		gotContentType = r.Header.Get("Content-Type")
-		body, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(body, &gotBody)
-		w.WriteHeader(http.StatusAccepted)
-	}))
-	defer srv.Close()
+			var (
+				hit                              bool
+				gotPath, gotAuth, gotContentType string
+				gotBody                          event.Event
+			)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hit = true
+				gotPath = r.URL.Path
+				gotAuth = r.Header.Get("Authorization")
+				gotContentType = r.Header.Get("Content-Type")
+				body, _ := io.ReadAll(r.Body)
+				_ = json.Unmarshal(body, &gotBody)
+				w.WriteHeader(http.StatusAccepted)
+			}))
+			defer srv.Close()
 
-	rec := NewHTTPRecorder(testProjectID, "secret-key", WithBaseURL(srv.URL))
-	e := event.New("user.login")
-	e.Actor = event.Actor{Type: "user", ID: "u1"}
-	require.NoError(t, rec.Record(t.Context(), e))
+			rec := NewHTTPRecorder(testProjectID, "secret-key", WithBaseURL(srv.URL+tc.baseURLPath))
+			require.NoError(t, rec.Record(t.Context(), tc.event))
 
-	require.Equal(t, "/v1/projects/"+testProjectID+"/events", gotPath)
-	require.Equal(t, "Bearer secret-key", gotAuth)
-	require.Equal(t, "application/json", gotContentType)
-	require.Equal(t, "user.login", gotBody.Action)
-	require.Equal(t, "u1", gotBody.Actor.ID)
-}
-
-func TestHTTPRecorder_Record_EmptyActionIsNoOp(t *testing.T) {
-	t.Parallel()
-
-	hit := false
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hit = true
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	rec := NewHTTPRecorder(testProjectID, "k", WithBaseURL(srv.URL))
-	require.NoError(t, rec.Record(t.Context(), &event.Event{}))
-	require.False(t, hit)
+			require.Equal(t, tc.wantHit, hit)
+			if !tc.wantHit {
+				return
+			}
+			require.Equal(t, tc.wantPath, gotPath)
+			require.Equal(t, "Bearer secret-key", gotAuth)
+			require.Equal(t, "application/json", gotContentType)
+			require.Equal(t, tc.wantAction, gotBody.Action)
+			require.Equal(t, tc.wantActorID, gotBody.Actor.ID)
+		})
+	}
 }
 
 func TestHTTPRecorder_RecordBatch(t *testing.T) {
@@ -184,21 +210,6 @@ func TestHTTPRecorder_Record_ErrorStatusClassification(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestHTTPRecorder_WithBaseURL_TrimsTrailingSlash(t *testing.T) {
-	t.Parallel()
-
-	var gotPath string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	rec := NewHTTPRecorder(testProjectID, "k", WithBaseURL(srv.URL+"/"))
-	require.NoError(t, rec.Record(t.Context(), event.New("t")))
-	require.Equal(t, "/v1/projects/"+testProjectID+"/events", gotPath)
 }
 
 func TestHTTPRecorder_DefaultBaseURL(t *testing.T) {
