@@ -48,55 +48,48 @@ func mintServer(t *testing.T, capture *recordedRequest) *httptest.Server {
 
 func TestMintToken_PostsExpectedRequest(t *testing.T) {
 	t.Parallel()
-	var got recordedRequest
-	srv := mintServer(t, &got)
+	for _, tc := range []struct {
+		name     string
+		opts     TokenOptions
+		wantBody string // the exact JSON the client must post
+	}{
+		{
+			name: "sends tenant expiry columns and actions",
+			opts: TokenOptions{
+				TenantID:       "acme",
+				ExpiresIn:      time.Hour,
+				AllowedColumns: []string{"occurred_at", "action"},
+				AllowedActions: []string{"user.login", "user.*"},
+			},
+			wantBody: `{"tenant_id":"acme","expires_in":3600,"columns":["occurred_at","action"],"actions":["user.login","user.*"]}`,
+		},
+		{
+			name:     "zero options send empty json",
+			opts:     TokenOptions{},
+			wantBody: `{}`, // so the server applies its own defaults
+		},
+		{
+			name:     "tenant id is trimmed",
+			opts:     TokenOptions{TenantID: "  acme  "},
+			wantBody: `{"tenant_id":"acme"}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var got recordedRequest
+			srv := mintServer(t, &got)
 
-	c := New(testProjectID, "secret-key", WithBaseURL(srv.URL))
-	token, err := c.MintToken(t.Context(), TokenOptions{
-		TenantID:       "acme",
-		ExpiresIn:      time.Hour,
-		AllowedColumns: []string{"occurred_at", "action"},
-		AllowedActions: []string{"user.login", "user.*"},
-	})
+			c := New(testProjectID, "secret-key", WithBaseURL(srv.URL))
+			token, err := c.MintToken(t.Context(), tc.opts)
 
-	require.NoError(t, err)
-	require.Equal(t, "the.test.token", token)
-	require.Equal(t, "/v1/projects/"+testProjectID+"/embed-tokens", got.path)
-	require.Equal(t, "Bearer secret-key", got.auth)
-	require.Equal(t, "application/json", got.contentType)
-
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(got.body, &body))
-	require.Equal(t, "acme", body["tenant_id"])
-	require.Equal(t, float64(3600), body["expires_in"])
-	require.Equal(t, []any{"occurred_at", "action"}, body["columns"])
-	require.Equal(t, []any{"user.login", "user.*"}, body["actions"])
-}
-
-func TestMintToken_ZeroOptionsSendsEmptyJSON(t *testing.T) {
-	t.Parallel()
-	var got recordedRequest
-	srv := mintServer(t, &got)
-
-	c := New(testProjectID, "k", WithBaseURL(srv.URL))
-	_, err := c.MintToken(t.Context(), TokenOptions{})
-	require.NoError(t, err)
-	require.Equal(t, "{}", string(got.body),
-		"empty TokenOptions should marshal to {} so the server applies defaults")
-}
-
-func TestMintToken_TenantIDIsTrimmed(t *testing.T) {
-	t.Parallel()
-	var got recordedRequest
-	srv := mintServer(t, &got)
-
-	c := New(testProjectID, "k", WithBaseURL(srv.URL))
-	_, err := c.MintToken(t.Context(), TokenOptions{TenantID: "  acme  "})
-	require.NoError(t, err)
-
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(got.body, &body))
-	require.Equal(t, "acme", body["tenant_id"])
+			require.NoError(t, err)
+			require.Equal(t, "the.test.token", token)
+			require.Equal(t, "/v1/projects/"+testProjectID+"/embed-tokens", got.path)
+			require.Equal(t, "Bearer secret-key", got.auth)
+			require.Equal(t, "application/json", got.contentType)
+			require.Equal(t, tc.wantBody, string(got.body))
+		})
+	}
 }
 
 func TestMintToken_ValidationErrors(t *testing.T) {
