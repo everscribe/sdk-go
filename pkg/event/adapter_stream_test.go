@@ -28,12 +28,14 @@ func (f *fakeServerStream) Context() context.Context     { return f.ctx }
 func (f *fakeServerStream) SendMsg(m any) error          { return nil }
 func (f *fakeServerStream) RecvMsg(m any) error          { return nil }
 
+const streamFullMethod = "/everscribe.v1.Tail/Watch"
+
 // invokeStream wires spy up behind event.StreamInterceptor and runs handler
 // through it, the same way grpc.ChainStreamInterceptor would.
 func invokeStream(t *testing.T, spy *spyRecorder, handler googlegrpc.StreamHandler) error {
 	t.Helper()
 	ic := event.StreamInterceptor(event.Options{Recorder: spy, Logger: nopLogger{}})
-	info := &googlegrpc.StreamServerInfo{FullMethod: "/everscribe.v1.Tail/Watch"}
+	info := &googlegrpc.StreamServerInfo{FullMethod: streamFullMethod}
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs(
 		"user-agent", "grpc-go/1.68",
 		"x-request-id", "req-stream",
@@ -42,23 +44,79 @@ func invokeStream(t *testing.T, spy *spyRecorder, handler googlegrpc.StreamHandl
 	return ic(nil, ss, info, handler)
 }
 
-// TestStream_OneEventPerStreamNotPerMessage covers the headline contract:
-// a stream that exchanges several messages still records exactly once, at
-// stream close, not once per SendMsg/RecvMsg.
-func TestStream_OneEventPerStreamNotPerMessage(t *testing.T) {
+func TestStream(t *testing.T) {
 	t.Parallel()
-	spy := &spyRecorder{}
+	for _, tc := range []struct {
+		name        string
+		handler     func(t *testing.T, stream googlegrpc.ServerStream) error
+		wantErr     bool
+		wantAction  string
+		wantStatus  string
+		wantCode    int
+		wantMessage any
+		wantMeta    map[string]any
+	}{
+		{
+			// The headline contract: a stream that exchanges several
+			// messages still records exactly once, at stream close, not
+			// once per SendMsg/RecvMsg.
+			name: "one event per stream not per message",
+			handler: func(t *testing.T, stream googlegrpc.ServerStream) error {
+				for i := 0; i < 5; i++ {
+					require.NoError(t, stream.SendMsg(struct{}{}))
+					require.NoError(t, stream.RecvMsg(new(struct{})))
+				}
+				return nil
+			},
+			wantAction: streamFullMethod, wantStatus: "ok", wantCode: 200,
+		},
+		{
+			// event.Current(ss.Context()) inside the handler must resolve
+			// to the same event the interceptor records, so handler-side
+			// Action/metadata writes make it into the recorded event.
+			name: "context threads to handler",
+			handler: func(t *testing.T, stream googlegrpc.ServerStream) error {
+				e := event.Current(stream.Context())
+				e.Action = "tail.watch"
+				e.WithField("cursor", "abc123")
+				return nil
+			},
+			wantAction: "tail.watch", wantStatus: "ok", wantCode: 200,
+			wantMeta: map[string]any{"cursor": "abc123"},
+		},
+		{
+			// Outcome mapping: a stream handler's returned gRPC error
+			// records the same HTTP-equivalent code the unary path does.
+			name: "error records http equivalent code",
+			handler: func(t *testing.T, stream googlegrpc.ServerStream) error {
+				return status.Error(codes.PermissionDenied, "nope")
+			},
+			wantErr:    true,
+			wantAction: streamFullMethod, wantStatus: "denied", wantCode: 403, wantMessage: "nope",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			spy := &spyRecorder{}
 
-	err := invokeStream(t, spy, func(srv any, stream googlegrpc.ServerStream) error {
-		for i := 0; i < 5; i++ {
-			require.NoError(t, stream.SendMsg(struct{}{}))
-			require.NoError(t, stream.RecvMsg(new(struct{})))
-		}
-		return nil
-	})
+			err := invokeStream(t, spy, func(srv any, stream googlegrpc.ServerStream) error {
+				return tc.handler(t, stream)
+			})
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
 
-	require.NoError(t, err)
-	require.Len(t, spy.events(), 1, "a multi-message stream must record exactly one event")
+			got := spy.events()
+			require.Len(t, got, 1, "a stream must record exactly one event")
+			require.Equal(t, tc.wantAction, got[0].Action)
+			require.Equal(t, tc.wantStatus, got[0].Result.Status)
+			require.Equal(t, tc.wantCode, got[0].Result.Code)
+			require.Equal(t, tc.wantMessage, got[0].Result.Message)
+			require.Equal(t, tc.wantMeta, got[0].Metadata)
+		})
+	}
 }
 
 // TestStream_OccurredAtStampedAtCloseNotOpen is the critical case: the
@@ -92,27 +150,6 @@ func TestStream_OccurredAtStampedAtCloseNotOpen(t *testing.T) {
 		"OccurredAt (%v) is after the interceptor returned (%v)", occurredAt, after)
 }
 
-// TestStream_ContextThreadsToHandler confirms event.Current(ss.Context())
-// inside the handler resolves to the same event the interceptor records,
-// so handler-side Action/metadata writes make it into the recorded event.
-func TestStream_ContextThreadsToHandler(t *testing.T) {
-	t.Parallel()
-	spy := &spyRecorder{}
-
-	err := invokeStream(t, spy, func(srv any, stream googlegrpc.ServerStream) error {
-		e := event.Current(stream.Context())
-		e.Action = "tail.watch"
-		e.WithField("cursor", "abc123")
-		return nil
-	})
-
-	require.NoError(t, err)
-	got := spy.events()
-	require.Len(t, got, 1)
-	require.Equal(t, "tail.watch", got[0].Action)
-	require.Equal(t, "abc123", got[0].Metadata["cursor"])
-}
-
 // TestStream_CloneInsideHandlerStaysUnnamed is the I5 falsification for
 // the stream path: StreamInterceptor used to set Action: info.FullMethod
 // on the template too, so a NewFromContext clone made inside the stream
@@ -134,24 +171,5 @@ func TestStream_CloneInsideHandlerStaysUnnamed(t *testing.T) {
 
 	got := spy.events()
 	require.Len(t, got, 1, "only the primary event auto-records")
-	require.Equal(t, "/everscribe.v1.Tail/Watch", got[0].Action)
-}
-
-// TestStream_ErrorRecordsHTTPEquivalentCode covers outcome mapping: a
-// stream handler's returned gRPC error records the same HTTP-equivalent
-// code the unary path does.
-func TestStream_ErrorRecordsHTTPEquivalentCode(t *testing.T) {
-	t.Parallel()
-	spy := &spyRecorder{}
-
-	err := invokeStream(t, spy, func(srv any, stream googlegrpc.ServerStream) error {
-		return status.Error(codes.PermissionDenied, "nope")
-	})
-
-	require.Error(t, err)
-	got := spy.events()
-	require.Len(t, got, 1)
-	require.Equal(t, "denied", got[0].Result.Status)
-	require.Equal(t, 403, got[0].Result.Code)
-	require.Equal(t, "nope", got[0].Result.Message)
+	require.Equal(t, streamFullMethod, got[0].Action)
 }
