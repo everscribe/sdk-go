@@ -116,7 +116,7 @@ func TestBufferedRecorder_Record_PreparesEvent(t *testing.T) {
 	b := newTestBuffered(t, inner)
 
 	e := &event.Event{Action: "user.login"}
-	require.NoError(t, b.Record(context.Background(), e))
+	require.NoError(t, b.Record(t.Context(), e))
 	require.NotEmpty(t, e.ID, "Record should populate ID before queueing")
 	require.False(t, e.OccurredAt.IsZero(), "Record should populate OccurredAt before queueing")
 }
@@ -126,10 +126,10 @@ func TestBufferedRecorder_Record_EmptyActionIsNoOp(t *testing.T) {
 	inner := &captureRec{}
 	b := newTestBuffered(t, inner)
 
-	require.NoError(t, b.Record(context.Background(), &event.Event{}))
-	require.NoError(t, b.Record(context.Background(), nil))
+	require.NoError(t, b.Record(t.Context(), &event.Event{}))
+	require.NoError(t, b.Record(t.Context(), nil))
 
-	require.NoError(t, b.Flush(context.Background()))
+	require.NoError(t, b.Flush(t.Context()))
 	got, calls := inner.snapshot()
 	require.Empty(t, got)
 	require.Zero(t, calls)
@@ -141,9 +141,9 @@ func TestBufferedRecorder_Flush_DrainsPendingEvents(t *testing.T) {
 	b := newTestBuffered(t, inner)
 
 	for _, action := range []string{"a.one", "a.two", "a.three"} {
-		require.NoError(t, b.Record(context.Background(), event.New(action)))
+		require.NoError(t, b.Record(t.Context(), event.New(action)))
 	}
-	require.NoError(t, b.Flush(context.Background()))
+	require.NoError(t, b.Flush(t.Context()))
 
 	got, _ := inner.snapshot()
 	require.Len(t, got, 3)
@@ -158,9 +158,9 @@ func TestBufferedRecorder_Flush_PrefersBatchRecorder(t *testing.T) {
 	b := newTestBuffered(t, inner)
 
 	for _, action := range []string{"a.one", "a.two"} {
-		require.NoError(t, b.Record(context.Background(), event.New(action)))
+		require.NoError(t, b.Record(t.Context(), event.New(action)))
 	}
-	require.NoError(t, b.Flush(context.Background()))
+	require.NoError(t, b.Flush(t.Context()))
 
 	batches, batchCalls := inner.batchSnapshot()
 	require.Equal(t, 1, batchCalls, "expected RecordBatch to be called once")
@@ -176,9 +176,9 @@ func TestBufferedRecorder_Flush_FallsBackToSerialRecord(t *testing.T) {
 	b := newTestBuffered(t, inner)
 
 	for _, action := range []string{"a.one", "a.two", "a.three"} {
-		require.NoError(t, b.Record(context.Background(), event.New(action)))
+		require.NoError(t, b.Record(t.Context(), event.New(action)))
 	}
-	require.NoError(t, b.Flush(context.Background()))
+	require.NoError(t, b.Flush(t.Context()))
 
 	_, calls := inner.snapshot()
 	require.Equal(t, 3, calls, "non-BatchRecorder inner should be called once per event")
@@ -191,9 +191,9 @@ func TestBufferedRecorder_Flush_PropagatesInnerError(t *testing.T) {
 	inner.batchErr = want
 
 	b := newTestBuffered(t, inner)
-	require.NoError(t, b.Record(context.Background(), event.New("a.one")))
+	require.NoError(t, b.Record(t.Context(), event.New("a.one")))
 
-	err := b.Flush(context.Background())
+	err := b.Flush(t.Context())
 	require.ErrorIs(t, err, want)
 	require.Equal(t, int64(1), b.Stats().FlushErrs)
 }
@@ -204,11 +204,11 @@ func TestBufferedRecorder_Flush_RespectsCtxCancel(t *testing.T) {
 	defer close(blocker.release) // unblock at test end so Close can drain
 
 	b := newTestBuffered(t, blocker)
-	require.NoError(t, b.Record(context.Background(), event.New("a.one")))
+	require.NoError(t, b.Record(t.Context(), event.New("a.one")))
 
 	// Force a flush so the inner is in flight, then issue a Flush whose
 	// ctx is already canceled - it should bail out without waiting.
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	err := b.Flush(ctx)
 	require.ErrorIs(t, err, context.Canceled)
@@ -220,7 +220,7 @@ func TestBufferedRecorder_FlushOnSizeThreshold(t *testing.T) {
 	b := newTestBuffered(t, inner, WithFlushSize(3))
 
 	for _, a := range []string{"a.one", "a.two", "a.three"} {
-		require.NoError(t, b.Record(context.Background(), event.New(a)))
+		require.NoError(t, b.Record(t.Context(), event.New(a)))
 	}
 
 	require.Eventually(t, func() bool {
@@ -238,7 +238,7 @@ func TestBufferedRecorder_FlushOnInterval(t *testing.T) {
 	)
 	t.Cleanup(func() { _ = b.Close() })
 
-	require.NoError(t, b.Record(context.Background(), event.New("a.one")))
+	require.NoError(t, b.Record(t.Context(), event.New("a.one")))
 	require.Eventually(t, func() bool {
 		_, calls := inner.batchSnapshot()
 		return calls >= 1
@@ -253,7 +253,7 @@ func TestBufferedRecorder_Close_DrainsPending(t *testing.T) {
 		WithSlogLogger(silentLogger()),
 	)
 	for _, a := range []string{"a.one", "a.two"} {
-		require.NoError(t, b.Record(context.Background(), event.New(a)))
+		require.NoError(t, b.Record(t.Context(), event.New(a)))
 	}
 	require.NoError(t, b.Close())
 
@@ -277,7 +277,7 @@ func TestBufferedRecorder_RecordAfterClose_IsDropped(t *testing.T) {
 	require.NoError(t, b.Close())
 
 	// Should not panic, should not deliver, should not error.
-	require.NoError(t, b.Record(context.Background(), event.New("a.one")))
+	require.NoError(t, b.Record(t.Context(), event.New("a.one")))
 	got, _ := inner.snapshot()
 	require.Empty(t, got)
 }
@@ -288,7 +288,7 @@ func TestBufferedRecorder_FlushAfterClose_IsNoOp(t *testing.T) {
 	b := newTestBuffered(t, inner)
 	require.NoError(t, b.Close())
 
-	require.NoError(t, b.Flush(context.Background()))
+	require.NoError(t, b.Flush(t.Context()))
 }
 
 func TestBufferedRecorder_OverflowPolicyDropNewest_CountsDrops(t *testing.T) {
@@ -307,7 +307,7 @@ func TestBufferedRecorder_OverflowPolicyDropNewest_CountsDrops(t *testing.T) {
 
 	// First Record fills buffer; background goroutine pulls it and blocks
 	// inside inner.Record. Subsequent records find the buffer full.
-	require.NoError(t, b.Record(context.Background(), event.New("a.one")))
+	require.NoError(t, b.Record(t.Context(), event.New("a.one")))
 	// Give the goroutine time to pick up the first event.
 	require.Eventually(t, func() bool {
 		blocker.mu.Lock()
@@ -316,9 +316,9 @@ func TestBufferedRecorder_OverflowPolicyDropNewest_CountsDrops(t *testing.T) {
 	}, time.Second, 5*time.Millisecond)
 
 	// Now fill the buffer again and try to push - these should drop.
-	require.NoError(t, b.Record(context.Background(), event.New("a.two")))
+	require.NoError(t, b.Record(t.Context(), event.New("a.two")))
 	for i := 0; i < 5; i++ {
-		require.NoError(t, b.Record(context.Background(), event.New("dropped")))
+		require.NoError(t, b.Record(t.Context(), event.New("dropped")))
 	}
 	require.GreaterOrEqual(t, b.Stats().Dropped, int64(1))
 }
@@ -337,15 +337,15 @@ func TestBufferedRecorder_OverflowPolicyError_ReturnsErrBufferFull(t *testing.T)
 	)
 	t.Cleanup(func() { _ = b.Close() })
 
-	require.NoError(t, b.Record(context.Background(), event.New("a.one")))
+	require.NoError(t, b.Record(t.Context(), event.New("a.one")))
 	require.Eventually(t, func() bool {
 		blocker.mu.Lock()
 		defer blocker.mu.Unlock()
 		return blocker.calls == 1
 	}, time.Second, 5*time.Millisecond)
 
-	require.NoError(t, b.Record(context.Background(), event.New("a.two"))) // fills buffer
-	err := b.Record(context.Background(), event.New("a.three"))            // overflow
+	require.NoError(t, b.Record(t.Context(), event.New("a.two"))) // fills buffer
+	err := b.Record(t.Context(), event.New("a.three"))            // overflow
 	require.ErrorIs(t, err, ErrBufferFull)
 }
 
@@ -363,15 +363,15 @@ func TestBufferedRecorder_OverflowPolicyBlock_RespectsCtxCancel(t *testing.T) {
 	)
 	t.Cleanup(func() { _ = b.Close() })
 
-	require.NoError(t, b.Record(context.Background(), event.New("a.one")))
+	require.NoError(t, b.Record(t.Context(), event.New("a.one")))
 	require.Eventually(t, func() bool {
 		blocker.mu.Lock()
 		defer blocker.mu.Unlock()
 		return blocker.calls == 1
 	}, time.Second, 5*time.Millisecond)
-	require.NoError(t, b.Record(context.Background(), event.New("a.two"))) // fills buffer
+	require.NoError(t, b.Record(t.Context(), event.New("a.two"))) // fills buffer
 
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
 	err := b.Record(ctx, event.New("a.three"))
 	require.ErrorIs(t, err, context.DeadlineExceeded)
@@ -391,18 +391,18 @@ func TestBufferedRecorder_OverflowPolicyBlock_UnblocksWhenSpaceFrees(t *testing.
 	t.Cleanup(func() { _ = b.Close() })
 
 	// Pipeline: event 1 in flight at inner, event 2 fills buffer.
-	require.NoError(t, b.Record(context.Background(), event.New("a.one")))
+	require.NoError(t, b.Record(t.Context(), event.New("a.one")))
 	require.Eventually(t, func() bool {
 		blocker.mu.Lock()
 		defer blocker.mu.Unlock()
 		return blocker.calls == 1
 	}, time.Second, 5*time.Millisecond)
-	require.NoError(t, b.Record(context.Background(), event.New("a.two")))
+	require.NoError(t, b.Record(t.Context(), event.New("a.two")))
 
 	// Third Record blocks in PolicyBlock until space frees.
 	done := make(chan error, 1)
 	go func() {
-		done <- b.Record(context.Background(), event.New("a.three"))
+		done <- b.Record(t.Context(), event.New("a.three"))
 	}()
 
 	// Releasing the blocker lets the inner finish, the run goroutine
@@ -434,19 +434,19 @@ func TestBufferedRecorder_OverflowPolicyBlock_ReturnsNilOnClose(t *testing.T) {
 		WithDrainTimeout(50*time.Millisecond),
 	)
 
-	require.NoError(t, b.Record(context.Background(), event.New("a.one")))
+	require.NoError(t, b.Record(t.Context(), event.New("a.one")))
 	require.Eventually(t, func() bool {
 		blocker.mu.Lock()
 		defer blocker.mu.Unlock()
 		return blocker.calls == 1
 	}, time.Second, 5*time.Millisecond)
-	require.NoError(t, b.Record(context.Background(), event.New("a.two"))) // fills buffer
+	require.NoError(t, b.Record(t.Context(), event.New("a.two"))) // fills buffer
 
 	done := make(chan error, 1)
 	started := make(chan struct{})
 	go func() {
 		close(started)
-		done <- b.Record(context.Background(), event.New("a.three"))
+		done <- b.Record(t.Context(), event.New("a.three"))
 	}()
 	<-started
 	// Give the goroutine time to enter the PolicyBlock select. The post-
@@ -478,17 +478,17 @@ func TestBufferedRecorder_DefaultOverflowPolicyIsDropNewest(t *testing.T) {
 	)
 	t.Cleanup(func() { _ = b.Close() })
 
-	require.NoError(t, b.Record(context.Background(), event.New("a.one")))
+	require.NoError(t, b.Record(t.Context(), event.New("a.one")))
 	require.Eventually(t, func() bool {
 		blocker.mu.Lock()
 		defer blocker.mu.Unlock()
 		return blocker.calls == 1
 	}, time.Second, 5*time.Millisecond)
-	require.NoError(t, b.Record(context.Background(), event.New("a.two"))) // fills buffer
+	require.NoError(t, b.Record(t.Context(), event.New("a.two"))) // fills buffer
 
 	// Default policy: overflow returns nil (not ErrBufferFull) and
 	// increments dropped.
-	require.NoError(t, b.Record(context.Background(), event.New("a.three")),
+	require.NoError(t, b.Record(t.Context(), event.New("a.three")),
 		"default policy must not return ErrBufferFull")
 	require.Eventually(t, func() bool {
 		return b.Stats().Dropped >= 1
@@ -501,9 +501,9 @@ func TestBufferedRecorder_Stats_TracksFlushed(t *testing.T) {
 	b := newTestBuffered(t, inner)
 
 	for _, a := range []string{"a.one", "a.two", "a.three"} {
-		require.NoError(t, b.Record(context.Background(), event.New(a)))
+		require.NoError(t, b.Record(t.Context(), event.New(a)))
 	}
-	require.NoError(t, b.Flush(context.Background()))
+	require.NoError(t, b.Flush(t.Context()))
 
 	require.Equal(t, int64(3), b.Stats().Flushed)
 }
@@ -537,18 +537,18 @@ func TestBufferedRecorder_DroppedEvent_IsNotMarkedRecorded(t *testing.T) {
 	)
 	t.Cleanup(func() { _ = b.Close() })
 
-	ctx, end := event.Begin(context.Background(), &event.Event{}, nil, b, nil)
+	ctx, end := event.Begin(t.Context(), &event.Event{}, nil, b, nil)
 	event.Current(ctx).Action = "test.dropped"
 
 	// Fill the buffer: the background goroutine picks up "a.one" and blocks
 	// inside inner.Record, holding the single buffer slot occupied by
 	// "a.two" once it is enqueued.
-	require.NoError(t, b.Record(context.Background(), event.New("a.one")))
+	require.NoError(t, b.Record(t.Context(), event.New("a.one")))
 	require.Eventually(t, func() bool {
 		_, calls := blocker.snapshot()
 		return calls == 1
 	}, time.Second, 5*time.Millisecond)
-	require.NoError(t, b.Record(context.Background(), event.New("a.two")))
+	require.NoError(t, b.Record(t.Context(), event.New("a.two")))
 
 	// The request-scoped event finds the buffer full and is dropped under
 	// the default PolicyDropNewest.

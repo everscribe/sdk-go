@@ -52,7 +52,7 @@ func TestMintToken_PostsExpectedRequest(t *testing.T) {
 	srv := mintServer(t, &got)
 
 	c := New(testProjectID, "secret-key", WithBaseURL(srv.URL))
-	token, err := c.MintToken(context.Background(), TokenOptions{
+	token, err := c.MintToken(t.Context(), TokenOptions{
 		TenantID:       "acme",
 		ExpiresIn:      time.Hour,
 		AllowedColumns: []string{"occurred_at", "action"},
@@ -79,7 +79,7 @@ func TestMintToken_ZeroOptionsSendsEmptyJSON(t *testing.T) {
 	srv := mintServer(t, &got)
 
 	c := New(testProjectID, "k", WithBaseURL(srv.URL))
-	_, err := c.MintToken(context.Background(), TokenOptions{})
+	_, err := c.MintToken(t.Context(), TokenOptions{})
 	require.NoError(t, err)
 	require.Equal(t, "{}", string(got.body),
 		"empty TokenOptions should marshal to {} so the server applies defaults")
@@ -91,7 +91,7 @@ func TestMintToken_TenantIDIsTrimmed(t *testing.T) {
 	srv := mintServer(t, &got)
 
 	c := New(testProjectID, "k", WithBaseURL(srv.URL))
-	_, err := c.MintToken(context.Background(), TokenOptions{TenantID: "  acme  "})
+	_, err := c.MintToken(t.Context(), TokenOptions{TenantID: "  acme  "})
 	require.NoError(t, err)
 
 	var body map[string]any
@@ -172,7 +172,7 @@ func TestMintToken_ValidationErrors(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := c.MintToken(context.Background(), tc.opts)
+			_, err := c.MintToken(t.Context(), tc.opts)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), tc.contains)
 		})
@@ -201,7 +201,7 @@ func TestMintToken_AllowedActionFormsAccepted(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := c.MintToken(context.Background(), TokenOptions{AllowedActions: tc.actions})
+			_, err := c.MintToken(t.Context(), TokenOptions{AllowedActions: tc.actions})
 			require.NoError(t, err)
 		})
 	}
@@ -220,7 +220,7 @@ func TestMintToken_AllEventColumnsAccepted(t *testing.T) {
 	}
 
 	c := New(testProjectID, "k", WithBaseURL(srv.URL))
-	_, err := c.MintToken(context.Background(), TokenOptions{AllowedColumns: expected})
+	_, err := c.MintToken(t.Context(), TokenOptions{AllowedColumns: expected})
 	require.NoError(t, err)
 
 	// Sanity check that the runtime-derived set matches the expected columns.
@@ -257,7 +257,7 @@ func TestMintToken_HTTPErrorReturnedAsError(t *testing.T) {
 			defer srv.Close()
 
 			c := New(testProjectID, "k", WithBaseURL(srv.URL))
-			_, err := c.MintToken(context.Background(), TokenOptions{})
+			_, err := c.MintToken(t.Context(), TokenOptions{})
 			require.Error(t, err)
 
 			var embedErr *Error
@@ -278,7 +278,7 @@ func TestMintToken_ContextCancellation(t *testing.T) {
 	defer srv.Close()
 
 	c := New(testProjectID, "k", WithBaseURL(srv.URL))
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	_, err := c.MintToken(ctx, TokenOptions{})

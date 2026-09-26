@@ -18,7 +18,7 @@ func TestNewEvent_PopulatesDefaults(t *testing.T) {
 
 func TestNewFromContext_NoTemplate_ReturnsMinimalEvent(t *testing.T) {
 	t.Parallel()
-	e := NewFromContext(context.Background())
+	e := NewFromContext(t.Context())
 	require.NotEmpty(t, e.ID)
 	require.False(t, e.OccurredAt.IsZero())
 	require.Empty(t, e.Action)
@@ -30,7 +30,7 @@ func TestNewFromContext_WithTemplate_CopiesActorAndOrigin(t *testing.T) {
 		Actor:  Actor{Type: "user", ID: "u1", DisplayName: "alice", Email: "a@b"},
 		Origin: Origin{IP: "1.2.3.4", UserAgent: "ua", RequestID: "req1"},
 	}
-	ctx := context.WithValue(context.Background(), eventTemplateKey{}, tmpl)
+	ctx := context.WithValue(t.Context(), eventTemplateKey{}, tmpl)
 
 	e := NewFromContext(ctx)
 	require.Equal(t, tmpl.Actor, e.Actor)
@@ -42,7 +42,7 @@ func TestNewFromContext_WithTemplate_CopiesActorAndOrigin(t *testing.T) {
 func TestNewFromContext_ReturnsIndependentClones(t *testing.T) {
 	t.Parallel()
 	tmpl := &Event{Actor: Actor{Type: "user", ID: "u1"}}
-	ctx := context.WithValue(context.Background(), eventTemplateKey{}, tmpl)
+	ctx := context.WithValue(t.Context(), eventTemplateKey{}, tmpl)
 
 	e1 := NewFromContext(ctx)
 	e2 := NewFromContext(ctx)
@@ -62,7 +62,7 @@ func TestNewFromContext_MetadataIsolation(t *testing.T) {
 		Actor:    Actor{Type: "user"},
 		Metadata: map[string]any{"shared": "yes"},
 	}
-	ctx := context.WithValue(context.Background(), eventTemplateKey{}, tmpl)
+	ctx := context.WithValue(t.Context(), eventTemplateKey{}, tmpl)
 
 	e := NewFromContext(ctx)
 	// NewFromContext nils metadata so each event owns its own map.

@@ -207,7 +207,7 @@ func TestClientDisconnect_StillRecords(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	go func() {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
 		if resp, err := http.DefaultClient.Do(req); err == nil {

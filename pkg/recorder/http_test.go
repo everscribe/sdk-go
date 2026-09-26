@@ -1,7 +1,6 @@
 package recorder
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -33,7 +32,7 @@ func TestHTTPRecorder_Record_PostsSingleEvent(t *testing.T) {
 	rec := NewHTTPRecorder(testProjectID, "secret-key", WithBaseURL(srv.URL))
 	e := event.New("user.login")
 	e.Actor = event.Actor{Type: "user", ID: "u1"}
-	require.NoError(t, rec.Record(context.Background(), e))
+	require.NoError(t, rec.Record(t.Context(), e))
 
 	require.Equal(t, "/v1/projects/"+testProjectID+"/events", gotPath)
 	require.Equal(t, "Bearer secret-key", gotAuth)
@@ -53,7 +52,7 @@ func TestHTTPRecorder_Record_EmptyActionIsNoOp(t *testing.T) {
 	defer srv.Close()
 
 	rec := NewHTTPRecorder(testProjectID, "k", WithBaseURL(srv.URL))
-	require.NoError(t, rec.Record(context.Background(), &event.Event{}))
+	require.NoError(t, rec.Record(t.Context(), &event.Event{}))
 	require.False(t, hit)
 }
 
@@ -126,7 +125,7 @@ func TestHTTPRecorder_RecordBatch(t *testing.T) {
 			defer srv.Close()
 
 			rec := NewHTTPRecorder(testProjectID, "k", WithBaseURL(srv.URL))
-			require.NoError(t, rec.RecordBatch(context.Background(), tc.events))
+			require.NoError(t, rec.RecordBatch(t.Context(), tc.events))
 
 			require.Equal(t, tc.wantHit, hit)
 			if !tc.wantHit {
@@ -173,7 +172,7 @@ func TestHTTPRecorder_Record_ErrorStatusClassification(t *testing.T) {
 			defer srv.Close()
 
 			rec := NewHTTPRecorder(testProjectID, "k", WithBaseURL(srv.URL))
-			err := rec.Record(context.Background(), event.New("test"))
+			err := rec.Record(t.Context(), event.New("test"))
 			require.Error(t, err)
 
 			var httpErr *HTTPError
@@ -198,7 +197,7 @@ func TestHTTPRecorder_WithBaseURL_TrimsTrailingSlash(t *testing.T) {
 	defer srv.Close()
 
 	rec := NewHTTPRecorder(testProjectID, "k", WithBaseURL(srv.URL+"/"))
-	require.NoError(t, rec.Record(context.Background(), event.New("t")))
+	require.NoError(t, rec.Record(t.Context(), event.New("t")))
 	require.Equal(t, "/v1/projects/"+testProjectID+"/events", gotPath)
 }
 
@@ -275,7 +274,7 @@ func TestHTTPRecorder_AutoIdempotencyKey(t *testing.T) {
 			if tc.preset != "" {
 				e.IdempotencyKey = tc.preset
 			}
-			require.NoError(t, rec.Record(context.Background(), e))
+			require.NoError(t, rec.Record(t.Context(), e))
 
 			if !tc.wantSet {
 				require.Empty(t, got.IdempotencyKey)
@@ -310,7 +309,7 @@ func TestHTTPRecorder_AutoIdempotencyKey_Batch(t *testing.T) {
 		{Action: "a.one"}, // empty key → auto-fill
 		{Action: "a.two", IdempotencyKey: "explicit-key-2"}, // preset → keep
 	}
-	require.NoError(t, rec.RecordBatch(context.Background(), events))
+	require.NoError(t, rec.RecordBatch(t.Context(), events))
 
 	require.Len(t, got.Events, 2)
 	require.Equal(t, got.Events[0].ID, got.Events[0].IdempotencyKey)

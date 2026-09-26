@@ -1,7 +1,6 @@
 package recorder
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -30,8 +29,8 @@ func TestNew_AppliesHTTPOption(t *testing.T) {
 	)
 	defer r.Close()
 
-	require.NoError(t, r.Record(context.Background(), event.New("user.login")))
-	require.NoError(t, r.Flush(context.Background()))
+	require.NoError(t, r.Record(t.Context(), event.New("user.login")))
+	require.NoError(t, r.Flush(t.Context()))
 	require.Equal(t, "/v1/projects/"+testProjectID+"/events/batch", gotPath)
 }
 
@@ -78,9 +77,9 @@ func TestNew_RecordFlushClose(t *testing.T) {
 	)
 	defer r.Close()
 
-	require.NoError(t, r.Record(context.Background(), event.New("a.one")))
-	require.NoError(t, r.Record(context.Background(), event.New("a.two")))
-	require.NoError(t, r.Flush(context.Background()))
+	require.NoError(t, r.Record(t.Context(), event.New("a.one")))
+	require.NoError(t, r.Record(t.Context(), event.New("a.two")))
+	require.NoError(t, r.Flush(t.Context()))
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -115,7 +114,7 @@ func TestNew_AutoCapturesResultViaOutcomeCapture(t *testing.T) {
 	rec := NewHTTPRecorder(testProjectID, "k", WithBaseURL(apiSrv.URL))
 
 	capture := stubOutcome{result: event.Result{Status: "denied", Code: http.StatusForbidden}, ok: true}
-	ctx, end := event.Begin(context.Background(), &event.Event{}, capture, nil, nil)
+	ctx, end := event.Begin(t.Context(), &event.Event{}, capture, nil, nil)
 	defer end()
 
 	e := event.Current(ctx)
