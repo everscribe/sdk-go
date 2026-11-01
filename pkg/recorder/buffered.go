@@ -59,6 +59,7 @@ type bufferedConfig struct {
 	overflow      OverflowPolicy
 	drainTimeout  time.Duration
 	logger        *slog.Logger
+	onDrop        func(events []event.Event, reason DropReason, err error)
 }
 
 func defaultBufferedConfig() bufferedConfig {
@@ -138,6 +139,10 @@ type BufferedRecorder struct {
 	dropped   atomic.Int64
 	flushed   atomic.Int64
 	flushErrs atomic.Int64
+	retries   atomic.Int64
+
+	// dropCounts is built once in the constructor and never mutated.
+	dropCounts map[DropReason]*atomic.Int64
 
 	flushReq chan chan error
 	done     chan struct{}
@@ -152,13 +157,18 @@ func NewBufferedRecorder(inner Recorder, opts ...BufferedOption) *BufferedRecord
 	for _, opt := range opts {
 		opt(&cfg)
 	}
+	counts := make(map[DropReason]*atomic.Int64, len(allDropReasons))
+	for _, r := range allDropReasons {
+		counts[r] = new(atomic.Int64)
+	}
 	b := &BufferedRecorder{
-		inner:    inner,
-		cfg:      cfg,
-		events:   make(chan event.Event, cfg.bufferSize),
-		flushReq: make(chan chan error),
-		done:     make(chan struct{}),
-		stop:     make(chan struct{}),
+		dropCounts: counts,
+		inner:      inner,
+		cfg:        cfg,
+		events:     make(chan event.Event, cfg.bufferSize),
+		flushReq:   make(chan chan error),
+		done:       make(chan struct{}),
+		stop:       make(chan struct{}),
 	}
 	go b.run()
 	return b
@@ -211,7 +221,8 @@ func (b *BufferedRecorder) Record(ctx context.Context, e *event.Event) error {
 			mark()
 			return nil
 		default:
-			n := b.dropped.Add(1)
+			b.reportDrop([]event.Event{*e}, DropBufferFull, nil)
+			n := b.dropped.Load()
 			if n == 1 || n%1000 == 0 {
 				b.cfg.logger.Warn("recorder buffer full, event dropped",
 					"action", e.Action,
@@ -271,22 +282,30 @@ func (b *BufferedRecorder) Close() error {
 
 // Stats returns cumulative counters for observability.
 func (b *BufferedRecorder) Stats() BufferedStats {
+	by := make(map[DropReason]int64, len(b.dropCounts))
+	for r, c := range b.dropCounts {
+		by[r] = c.Load()
+	}
 	return BufferedStats{
-		Dropped:    b.dropped.Load(),
-		Flushed:    b.flushed.Load(),
-		FlushErrs:  b.flushErrs.Load(),
-		Pending:    len(b.events),
-		BufferSize: cap(b.events),
+		Dropped:         b.dropped.Load(),
+		DroppedByReason: by,
+		Flushed:         b.flushed.Load(),
+		FlushErrs:       b.flushErrs.Load(),
+		Retries:         b.retries.Load(),
+		Pending:         len(b.events),
+		BufferSize:      cap(b.events),
 	}
 }
 
 // BufferedStats reports BufferedRecorder's runtime counters.
 type BufferedStats struct {
-	Dropped    int64 // total events dropped due to overflow
-	Flushed    int64 // total events successfully flushed to inner Recorder
-	FlushErrs  int64 // total flush calls that returned an error
-	Pending    int   // events currently in the buffer
-	BufferSize int   // buffer capacity
+	Dropped         int64                // events dropped because the buffer was full; always equals DroppedByReason[DropBufferFull]
+	DroppedByReason map[DropReason]int64 // events dropped, per reason
+	Flushed         int64                // total events successfully flushed to inner Recorder
+	FlushErrs       int64                // failed delivery attempts (one flush can make several)
+	Retries         int64                // total delivery retries
+	Pending         int                  // events currently in the buffer
+	BufferSize      int                  // buffer capacity
 }
 
 // run is the background goroutine that drains events and flushes on
