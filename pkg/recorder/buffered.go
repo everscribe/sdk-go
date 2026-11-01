@@ -43,6 +43,9 @@ const (
 	PolicyError
 )
 
+// closeGrace is how long Close waits for the worker after cancelling it.
+const closeGrace = time.Second
+
 // BufferedOption configures a BufferedRecorder. BufferedOption also
 // satisfies RecorderOption, so it can be passed directly to New.
 type BufferedOption func(*bufferedConfig)
@@ -126,7 +129,8 @@ func WithOverflowPolicy(p OverflowPolicy) BufferedOption {
 }
 
 // WithDrainTimeout sets the maximum time Close will wait for in-flight
-// events to flush. Events remaining after the timeout are dropped.
+// events to flush. Events remaining after the timeout are reported to
+// the drop callback as shutdown.
 // Default 30 seconds.
 func WithDrainTimeout(d time.Duration) BufferedOption {
 	return func(c *bufferedConfig) { c.drainTimeout = d }
@@ -207,9 +211,14 @@ type BufferedRecorder struct {
 	workCtx    context.Context
 	cancelWork context.CancelFunc
 
+	// mu orders Record's stop check and send before Close's drain.
+	mu sync.RWMutex
+
 	flushReq chan chan struct{}
 	done     chan struct{}
-	stop     chan struct{}
+	stop     chan struct{} // closed first by Close; Record stops sending
+	drain    chan struct{} // closed once no send can follow; worker drains
+	closed   chan struct{} // closed when the first Close returns
 	stopOnce sync.Once
 }
 
@@ -235,6 +244,8 @@ func NewBufferedRecorder(inner Recorder, opts ...BufferedOption) *BufferedRecord
 		flushReq:   make(chan chan struct{}),
 		done:       make(chan struct{}),
 		stop:       make(chan struct{}),
+		drain:      make(chan struct{}),
+		closed:     make(chan struct{}),
 	}
 	go b.run()
 	return b
@@ -246,47 +257,61 @@ func (b *BufferedRecorder) Record(ctx context.Context, e *event.Event) error {
 	if e == nil || e.Action == "" {
 		return nil
 	}
-	// Post-Close guard - drop silently rather than block or panic.
+
+	// PrepareEventFields fills ID, OccurredAt, and Result now, but defers
+	// the dedupe mark: every path below can discard the event instead of
+	// enqueuing it. Marking it recorded before it lands in the buffer
+	// would suppress end()'s auto-record backstop on exactly the events
+	// that get dropped. mark is only invoked after a send succeeds.
+	mark := event.PrepareEventFields(ctx, e)
+
+	// The read lock spans the stop check and the send, so Close's write
+	// lock waits out every send in progress. Drops are reported after
+	// unlocking: an onDrop that calls Close would otherwise deadlock.
+	b.mu.RLock()
 	select {
 	case <-b.stop:
+		b.mu.RUnlock()
+		b.reportDrop([]event.Event{*e}, DropClosed, nil)
 		return nil
 	default:
 	}
-
-	// PrepareEventFields fills ID, OccurredAt, and Result now, but defers
-	// the dedupe mark: every overflow path below can discard the event
-	// instead of enqueuing it. Marking it recorded before it lands in the
-	// buffer would suppress end()'s auto-record backstop on exactly the
-	// events that get dropped. mark is only invoked after a send succeeds.
-	mark := event.PrepareEventFields(ctx, e)
 
 	switch b.cfg.overflow {
 	case PolicyBlock:
 		select {
 		case b.events <- *e:
+			b.mu.RUnlock()
 			mark()
 			return nil
 		case <-ctx.Done():
+			b.mu.RUnlock()
 			return ctx.Err()
 		case <-b.stop:
+			b.mu.RUnlock()
+			b.reportDrop([]event.Event{*e}, DropClosed, nil)
 			return nil
 		}
 
 	case PolicyError:
 		select {
 		case b.events <- *e:
+			b.mu.RUnlock()
 			mark()
 			return nil
 		default:
+			b.mu.RUnlock()
 			return ErrBufferFull
 		}
 
 	default: // PolicyDropNewest
 		select {
 		case b.events <- *e:
+			b.mu.RUnlock()
 			mark()
 			return nil
 		default:
+			b.mu.RUnlock()
 			b.reportDrop([]event.Event{*e}, DropBufferFull, nil)
 			n := b.dropped.Load()
 			if n == 1 || n%1000 == 0 {
@@ -332,23 +357,68 @@ func (b *BufferedRecorder) Flush(ctx context.Context) error {
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-b.closed:
+		return nil
 	}
 }
 
-// Close drains pending events and stops the background goroutine.
-// Blocks until the drain completes or the configured drain timeout
-// elapses. Returns context.DeadlineExceeded if the drain timed out
-// with events still pending.
+// Close drains pending events, with retries, and stops the background
+// goroutine. Records after Close, and PolicyBlock waiters it releases,
+// are reported as closed. If the drain timeout elapses, Close cancels
+// the in-flight send, reports what is left as shutdown, and returns
+// context.DeadlineExceeded. An inner Recorder that ignores ctx gets a
+// 1s grace; its in-flight batch is then reported when the call returns.
+// Only the first call has effect; later calls return nil.
 func (b *BufferedRecorder) Close() error {
+	first := false
 	b.stopOnce.Do(func() {
-		close(b.stop)
+		first = true
+		close(b.stop) // releases PolicyBlock waiters
 	})
+	if !first {
+		return nil
+	}
+	defer close(b.closed)
+
+	// Wait out every Record already past its stop check.
+	b.mu.Lock()
+	b.mu.Unlock() //nolint:staticcheck // empty critical section is the point
+	close(b.drain)
+
+	drain := time.NewTimer(b.cfg.drainTimeout)
+	defer drain.Stop()
 	select {
 	case <-b.done:
 		return nil
-	case <-time.After(b.cfg.drainTimeout):
-		return context.DeadlineExceeded
+	case <-drain.C:
 	}
+
+	b.cancelWork()
+	grace := time.NewTimer(closeGrace)
+	defer grace.Stop()
+	select {
+	case <-b.done:
+		return context.DeadlineExceeded
+	case <-grace.C:
+	}
+
+	// The inner Recorder ignores ctx: report the queue and return.
+	var left []event.Event
+queue:
+	for {
+		select {
+		case e := <-b.events:
+			left = append(left, e)
+		default:
+			break queue
+		}
+	}
+	if len(left) > 0 {
+		b.cfg.logger.Error("recorder dropped events",
+			"reason", string(DropShutdown), "count", len(left), "error", context.DeadlineExceeded)
+		b.reportDrop(left, DropShutdown, nil)
+	}
+	return context.DeadlineExceeded
 }
 
 // Stats returns cumulative counters for observability.
@@ -418,7 +488,7 @@ func (b *BufferedRecorder) run() {
 		if rem, err := b.deliver(b.workCtx, batch); err != nil {
 			b.cfg.logger.Error("recorder dropped events",
 				"reason", string(DropShutdown), "count", len(rem), "error", err)
-			b.reportDrop(rem, DropShutdown, err)
+			b.reportDrop(rem, DropShutdown, nil)
 		}
 		batch = batch[:0]
 		kept := waiters[:0]
@@ -459,7 +529,7 @@ func (b *BufferedRecorder) run() {
 			select {
 			case ack := <-b.flushReq:
 				wait(ack)
-			case <-b.stop:
+			case <-b.drain:
 				shutdown()
 				return
 			default:
@@ -497,9 +567,8 @@ func (b *BufferedRecorder) run() {
 		case ack := <-b.flushReq:
 			wait(ack)
 
-		case <-b.stop:
-			// Record calls racing with stop see the closed stop chan
-			// and bail out.
+		case <-b.drain:
+			// Close closes drain only once no Record can still send.
 			shutdown()
 			return
 		}

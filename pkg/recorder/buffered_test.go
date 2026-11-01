@@ -5,7 +5,10 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"runtime"
+	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -279,13 +282,18 @@ func TestBufferedRecorder_Close_Idempotent(t *testing.T) {
 func TestBufferedRecorder_RecordAfterClose_IsDropped(t *testing.T) {
 	t.Parallel()
 	inner := &captureRec{}
-	b := newTestBuffered(t, inner)
+	drops := &dropLog{}
+	b := newTestBuffered(t, inner, drops.opt())
 	require.NoError(t, b.Close())
 
 	// Should not panic, should not deliver, should not error.
-	require.NoError(t, b.Record(t.Context(), event.New("a.one")))
+	e := event.New("a.one")
+	require.NoError(t, b.Record(t.Context(), e))
 	got, _ := inner.snapshot()
 	require.Empty(t, got)
+	require.NotEmpty(t, e.ID)
+	require.Equal(t, []string{e.ID}, drops.droppedIDs(DropClosed))
+	require.EqualValues(t, 1, b.Stats().DroppedByReason[DropClosed])
 }
 
 func TestBufferedRecorder_FlushAfterClose_IsNoOp(t *testing.T) {
@@ -427,8 +435,10 @@ func TestBufferedRecorder_OverflowPolicyBlock_ReturnsNilOnClose(t *testing.T) {
 	t.Parallel()
 	blocker := &blockingRec{release: make(chan struct{})}
 	defer close(blocker.release)
+	drops := &dropLog{}
 
 	b := NewBufferedRecorder(blocker,
+		drops.opt(),
 		WithBufferSize(1),
 		WithFlushSize(1),
 		WithFlushInterval(time.Hour),
@@ -450,9 +460,10 @@ func TestBufferedRecorder_OverflowPolicyBlock_ReturnsNilOnClose(t *testing.T) {
 
 	done := make(chan error, 1)
 	started := make(chan struct{})
+	blocked := event.New("a.three")
 	go func() {
 		close(started)
-		done <- b.Record(t.Context(), event.New("a.three"))
+		done <- b.Record(t.Context(), blocked)
 	}()
 	<-started
 	// Give the goroutine time to enter the PolicyBlock select. The post-
@@ -468,6 +479,7 @@ func TestBufferedRecorder_OverflowPolicyBlock_ReturnsNilOnClose(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("PolicyBlock Record should have returned nil when Close fired")
 	}
+	require.Equal(t, []string{blocked.ID}, drops.droppedIDs(DropClosed))
 }
 
 func TestBufferedRecorder_Stats_TracksFlushed(t *testing.T) {
@@ -766,5 +778,238 @@ func TestBufferedRecorder_Flush_OverlappingFlushesEachCountTheirOwn(t *testing.T
 		require.Equal(t, ids, delivered)
 		dc, _ := drops.snapshot()
 		require.Empty(t, dc)
+	})
+}
+
+// ctxRec blocks every send until its ctx ends and notes the ctx error.
+type ctxRec struct {
+	mu   sync.Mutex
+	errs []error
+}
+
+func (c *ctxRec) Record(ctx context.Context, e *event.Event) error {
+	return c.RecordBatch(ctx, []event.Event{*e})
+}
+
+func (c *ctxRec) RecordBatch(ctx context.Context, _ []event.Event) error {
+	<-ctx.Done()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.errs = append(c.errs, ctx.Err())
+	return ctx.Err()
+}
+
+func (c *ctxRec) snapshot() []error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.errs)
+}
+
+func TestBufferedRecorder_Close_HungRequest(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		inner := &ctxRec{}
+		drops := &dropLog{}
+		b := newDeliverRec(t, inner, drops, WithDrainTimeout(200*time.Millisecond))
+
+		ids := recordN(t, b, 3)
+		start := time.Now()
+		require.ErrorIs(t, b.Close(), context.DeadlineExceeded)
+		require.Less(t, time.Since(start), time.Second)
+
+		require.Equal(t, []error{context.Canceled}, inner.snapshot(), "Close cancels the in-flight send")
+		require.Equal(t, ids, drops.droppedIDs(DropShutdown))
+		select {
+		case <-b.done:
+		default:
+			t.Fatal("worker still running after Close returned")
+		}
+	})
+}
+
+func TestBufferedRecorder_Close_InnerIgnoresCtx(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name         string
+		result       error
+		wantInFlight bool // in-flight batch reported shutdown
+	}{
+		{name: "in-flight send succeeds", result: nil},
+		{name: "in-flight send fails", result: err503, wantInFlight: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				gate := make(chan struct{})
+				inner := &scriptedRec{fn: func(n int, _ []string) error {
+					if n == 0 {
+						<-gate // ignores ctx
+						return tc.result
+					}
+					return nil
+				}}
+				drops := &dropLog{}
+				drain := 200 * time.Millisecond
+				b := newDeliverRec(t, inner, drops,
+					WithFlushSize(2),
+					WithDrainTimeout(drain))
+
+				inFlight := recordN(t, b, 2)
+				synctest.Wait() // the worker is stuck in the first send
+				queued := recordN(t, b, 3)
+
+				start := time.Now()
+				require.ErrorIs(t, b.Close(), context.DeadlineExceeded)
+				require.LessOrEqual(t, time.Since(start), drain+1500*time.Millisecond)
+				require.Equal(t, queued, drops.droppedIDs(DropShutdown), "Close reports what is still queued")
+
+				close(gate)
+				<-b.done
+				want := queued
+				if tc.wantInFlight {
+					want = append(slices.Clone(queued), inFlight...)
+				}
+				require.Equal(t, want, drops.droppedIDs(DropShutdown))
+				_, _, delivered := inner.snapshot()
+				if tc.wantInFlight {
+					require.Empty(t, delivered)
+				} else {
+					require.Equal(t, inFlight, delivered)
+				}
+			})
+		})
+	}
+}
+
+func TestBufferedRecorder_RecordCloseRace(t *testing.T) {
+	t.Parallel()
+	inner := &captureBatchRec{}
+	drops := &dropLog{}
+	b := newTestBuffered(t, inner, drops.opt(), WithBufferSize(64), WithFlushSize(16))
+
+	const workers, perWorker = 50, 100
+	var recorded atomic.Int64
+	ids := make([][]string, workers)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for w := range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for range perWorker {
+				e := event.New("a.race")
+				if err := b.Record(context.Background(), e); err != nil {
+					t.Errorf("Record: %v", err)
+				}
+				ids[w] = append(ids[w], e.ID)
+				recorded.Add(1)
+			}
+		}()
+	}
+	closeErr := make(chan error, 1)
+	go func() {
+		<-start
+		for recorded.Load() < workers*perWorker/2 {
+			runtime.Gosched()
+		}
+		closeErr <- b.Close()
+	}()
+	close(start)
+	wg.Wait()
+	require.NoError(t, <-closeErr)
+
+	seen := map[string]int{}
+	batches, _ := inner.batchSnapshot()
+	for _, batch := range batches {
+		for _, id := range eventIDs(batch) {
+			seen[id]++
+		}
+	}
+	calls, _ := drops.snapshot()
+	for _, c := range calls {
+		for _, id := range eventIDs(c.events) {
+			seen[id]++
+		}
+	}
+	var all []string
+	for _, w := range ids {
+		all = append(all, w...)
+	}
+	require.Len(t, all, workers*perWorker)
+	for _, id := range all {
+		require.NotEmpty(t, id)
+		require.Equal(t, 1, seen[id], "event %s delivered or reported exactly once", id)
+	}
+	require.Len(t, seen, len(all), "nothing delivered or reported that was not recorded")
+}
+
+func TestBufferedRecorder_BlockWaiterReleasedByClose(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		drops := &dropLog{}
+		b := newDeliverRec(t, &ctxRec{}, drops,
+			WithBufferSize(1),
+			WithFlushSize(1),
+			WithOverflowPolicy(PolicyBlock),
+			WithDrainTimeout(100*time.Millisecond))
+
+		held := recordN(t, b, 1)
+		synctest.Wait() // the worker holds the first event
+		queued := recordN(t, b, 1)
+
+		e := event.New("a.blocked")
+		done := make(chan error, 1)
+		go func() { done <- b.Record(t.Context(), e) }()
+		synctest.Wait() // durably blocked on the full buffer
+
+		require.ErrorIs(t, b.Close(), context.DeadlineExceeded)
+		require.NoError(t, <-done)
+		require.Equal(t, []string{e.ID}, drops.droppedIDs(DropClosed))
+		require.Equal(t, append(held, queued...), drops.droppedIDs(DropShutdown))
+	})
+}
+
+func TestBufferedRecorder_CallbackCallsClose_NoDeadlock(t *testing.T) {
+	t.Parallel()
+	var b *BufferedRecorder
+	closed := make(chan error, 1)
+	b = newTestBuffered(t, &ctxRec{},
+		WithBufferSize(1),
+		WithFlushSize(1),
+		WithDrainTimeout(100*time.Millisecond),
+		WithOnDrop(func(_ []event.Event, r DropReason, _ error) {
+			if r == DropBufferFull {
+				closed <- b.Close()
+			}
+		}))
+
+	require.NoError(t, b.Record(t.Context(), event.New("a.one")))
+	require.Eventually(t, func() bool { return len(b.events) == 0 }, time.Second, time.Millisecond)
+	require.NoError(t, b.Record(t.Context(), event.New("a.two"))) // fills the buffer
+
+	done := make(chan error, 1)
+	go func() { done <- b.Record(t.Context(), event.New("a.three")) }()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("Record deadlocked: onDrop called Close while Record held the lock")
+	}
+	require.ErrorIs(t, <-closed, context.DeadlineExceeded)
+}
+
+func TestBufferedRecorder_Close_ReleasesBlockedFlush(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		b := newDeliverRec(t, &ctxRec{}, &dropLog{}, WithDrainTimeout(100*time.Millisecond))
+		recordN(t, b, 2)
+
+		done := make(chan error, 1)
+		go func() { done <- b.Flush(t.Context()) }()
+		synctest.Wait() // Flush waits on the hung send
+
+		require.ErrorIs(t, b.Close(), context.DeadlineExceeded)
+		require.NoError(t, <-done)
 	})
 }
