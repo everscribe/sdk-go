@@ -252,6 +252,32 @@ func PrepareEventFields(ctx context.Context, e *Event) (mark func()) {
 	return func() { st.recorded.Store(true) }
 }
 
+// AutoRecordStatus reports how the middleware backstop relates to e.
+type AutoRecordStatus int
+
+const (
+	AutoRecordNone       AutoRecordStatus = iota // not the request-scoped event
+	AutoRecordPending                            // end() will still try to record e
+	AutoRecordInProgress                         // this call is end()'s own attempt
+)
+
+// AutoRecord tells a Recorder whether end() will retry e, so a drop can
+// be reported once rather than twice. It is for Recorder implementers,
+// not handler code.
+func AutoRecord(ctx context.Context, e *Event) AutoRecordStatus {
+	st, _ := ctx.Value(requestStateKey{}).(*requestState)
+	if st == nil || e == nil || e != st.current {
+		return AutoRecordNone
+	}
+	if st.ending.Load() {
+		return AutoRecordInProgress
+	}
+	if st.recorder == nil || e.Action == "" || st.recorded.Load() {
+		return AutoRecordNone
+	}
+	return AutoRecordPending
+}
+
 // marshalRedacted marshals v to JSON, then walks the result and replaces
 // the values at the given JSON pointer paths with "[REDACTED]". Paths
 // that do not exist in the document are silently skipped.

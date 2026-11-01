@@ -265,6 +265,10 @@ func (b *BufferedRecorder) Record(ctx context.Context, e *event.Event) error {
 	// that get dropped. mark is only invoked after a send succeeds.
 	mark := event.PrepareEventFields(ctx, e)
 
+	// A drop end() will retry is left for its attempt to report, so each
+	// event is reported at most once.
+	auto := event.AutoRecord(ctx, e)
+
 	// The read lock spans the stop check and the send, so Close's write
 	// lock waits out every send in progress. Drops are reported after
 	// unlocking: an onDrop that calls Close would otherwise deadlock.
@@ -272,7 +276,7 @@ func (b *BufferedRecorder) Record(ctx context.Context, e *event.Event) error {
 	select {
 	case <-b.stop:
 		b.mu.RUnlock()
-		b.reportDrop([]event.Event{*e}, DropClosed, nil)
+		b.dropClosed(e, auto)
 		return nil
 	default:
 	}
@@ -286,10 +290,10 @@ func (b *BufferedRecorder) Record(ctx context.Context, e *event.Event) error {
 			return nil
 		case <-ctx.Done():
 			b.mu.RUnlock()
-			return ctx.Err()
+			return b.overflowErr(e, auto, ctx.Err())
 		case <-b.stop:
 			b.mu.RUnlock()
-			b.reportDrop([]event.Event{*e}, DropClosed, nil)
+			b.dropClosed(e, auto)
 			return nil
 		}
 
@@ -301,7 +305,7 @@ func (b *BufferedRecorder) Record(ctx context.Context, e *event.Event) error {
 			return nil
 		default:
 			b.mu.RUnlock()
-			return ErrBufferFull
+			return b.overflowErr(e, auto, ErrBufferFull)
 		}
 
 	default: // PolicyDropNewest
@@ -312,8 +316,11 @@ func (b *BufferedRecorder) Record(ctx context.Context, e *event.Event) error {
 			return nil
 		default:
 			b.mu.RUnlock()
-			b.reportDrop([]event.Event{*e}, DropBufferFull, nil)
-			n := b.dropped.Load()
+			// end() in pkg/event/lifecycle.go must retry a Pending drop, or this skip loses it.
+			if auto == event.AutoRecordPending {
+				return nil
+			}
+			n := b.reportDrop([]event.Event{*e}, DropBufferFull, nil)
 			if n == 1 || n%1000 == 0 {
 				b.cfg.logger.Warn("recorder buffer full, event dropped",
 					"action", e.Action,
@@ -323,6 +330,23 @@ func (b *BufferedRecorder) Record(ctx context.Context, e *event.Event) error {
 			return nil
 		}
 	}
+}
+
+// dropClosed reports an event recorded after Close, unless end() will
+// retry it and report it then.
+func (b *BufferedRecorder) dropClosed(e *event.Event, auto event.AutoRecordStatus) {
+	if auto != event.AutoRecordPending {
+		b.reportDrop([]event.Event{*e}, DropClosed, nil)
+	}
+}
+
+// overflowErr returns err for an event the buffer had no room for. The
+// auto-record path has no caller to see err, so its event is reported.
+func (b *BufferedRecorder) overflowErr(e *event.Event, auto event.AutoRecordStatus, err error) error {
+	if auto == event.AutoRecordInProgress {
+		b.reportDrop([]event.Event{*e}, DropBufferFull, err)
+	}
+	return err
 }
 
 // Flush sends the events buffered at the time of the call, in batches

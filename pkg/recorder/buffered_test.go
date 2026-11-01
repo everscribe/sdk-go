@@ -536,7 +536,7 @@ func TestBufferedRecorder_DroppedEvent_IsNotMarkedRecorded(t *testing.T) {
 	// The request-scoped event finds the buffer full and is dropped under
 	// the default PolicyDropNewest.
 	require.NoError(t, b.Record(ctx, event.Current(ctx)))
-	require.Equal(t, int64(1), b.Stats().Dropped, "the request-scoped event must be counted as dropped")
+	require.Zero(t, b.Stats().Dropped, "a drop end() will retry is not counted yet")
 
 	// Release the blocked inner call so the buffer drains.
 	close(blocker.release)
@@ -1011,5 +1011,195 @@ func TestBufferedRecorder_Close_ReleasesBlockedFlush(t *testing.T) {
 
 		require.ErrorIs(t, b.Close(), context.DeadlineExceeded)
 		require.NoError(t, <-done)
+	})
+}
+
+// fillBuffer leaves a bufferSize-1, flushSize-1 recorder full: the worker
+// holds one event and a second waits in the buffer. Call inside synctest.
+func fillBuffer(t *testing.T, b *BufferedRecorder) {
+	t.Helper()
+	recordN(t, b, 1)
+	synctest.Wait()
+	recordN(t, b, 1)
+}
+
+// errLog notes every Error message.
+type errLog struct {
+	mu   sync.Mutex
+	msgs []string
+}
+
+func (l *errLog) Error(msg string, _ ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.msgs = append(l.msgs, msg)
+}
+
+func (l *errLog) snapshot() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.msgs)
+}
+
+func TestBufferedRecorder_Backstop_DropThenDeliver(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		inner := &blockingRec{release: make(chan struct{})}
+		drops := &dropLog{}
+		b := newDeliverRec(t, inner, drops, WithBufferSize(1), WithFlushSize(1))
+		fillBuffer(t, b)
+
+		ctx, end := event.Begin(t.Context(), &event.Event{}, nil, b, nil)
+		cur := event.Current(ctx)
+		cur.Action = "a.scoped"
+		require.NoError(t, b.Record(ctx, cur)) // dropped, left for end()
+		require.Equal(t, event.AutoRecordPending, event.AutoRecord(ctx, cur), "the drop left it unmarked")
+
+		close(inner.release)
+		synctest.Wait() // the buffer drains
+		end()
+		require.NoError(t, b.Flush(t.Context()))
+
+		actions, _ := inner.snapshot()
+		require.Equal(t, 1, countOf(actions, "a.scoped"), "delivered once")
+		calls, _ := drops.snapshot()
+		require.Empty(t, calls)
+		st := b.Stats()
+		require.Zero(t, st.Dropped)
+		require.Zero(t, st.DroppedByReason[DropBufferFull])
+	})
+}
+
+func countOf(ss []string, want string) int {
+	n := 0
+	for _, s := range ss {
+		if s == want {
+			n++
+		}
+	}
+	return n
+}
+
+func TestBufferedRecorder_Backstop_DropTwice(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		drops := &dropLog{}
+		b := newDeliverRec(t, &ctxRec{}, drops, WithBufferSize(1), WithFlushSize(1))
+		fillBuffer(t, b)
+
+		ctx, end := event.Begin(t.Context(), &event.Event{}, nil, b, nil)
+		cur := event.Current(ctx)
+		cur.Action = "a.scoped"
+		require.NoError(t, b.Record(ctx, cur))
+		require.Empty(t, drops.droppedIDs(DropBufferFull), "end() will retry, so no report yet")
+
+		end()
+		require.Equal(t, []string{cur.ID}, drops.droppedIDs(DropBufferFull))
+		calls, _ := drops.snapshot()
+		require.Len(t, calls, 1)
+		require.NoError(t, calls[0].err)
+		st := b.Stats()
+		require.EqualValues(t, 1, st.Dropped)
+		require.Equal(t, st.Dropped, st.DroppedByReason[DropBufferFull])
+	})
+}
+
+func TestBufferedRecorder_Backstop_ClosedOnce(t *testing.T) {
+	t.Parallel()
+	drops := &dropLog{}
+	b := newDeliverRec(t, &captureRec{}, drops)
+	require.NoError(t, b.Close())
+
+	ctx, end := event.Begin(t.Context(), &event.Event{}, nil, b, nil)
+	cur := event.Current(ctx)
+	cur.Action = "a.scoped"
+	require.NoError(t, b.Record(ctx, cur))
+	require.Empty(t, drops.droppedIDs(DropClosed), "end() will retry, so no report yet")
+	require.Zero(t, b.Stats().DroppedByReason[DropClosed])
+
+	end()
+	require.Equal(t, []string{cur.ID}, drops.droppedIDs(DropClosed))
+	calls, _ := drops.snapshot()
+	require.Len(t, calls, 1)
+	require.EqualValues(t, 1, b.Stats().DroppedByReason[DropClosed])
+}
+
+func TestBufferedRecorder_AutoRecord_ErrorPolicy(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		drops := &dropLog{}
+		b := newDeliverRec(t, &ctxRec{}, drops,
+			WithBufferSize(1), WithFlushSize(1), WithOverflowPolicy(PolicyError))
+		fillBuffer(t, b)
+
+		log := &errLog{}
+		ctx, end := event.Begin(t.Context(), &event.Event{}, nil, b, log)
+		cur := event.Current(ctx)
+		cur.Action = "a.scoped"
+		end()
+
+		require.Equal(t, []string{cur.ID}, drops.droppedIDs(DropBufferFull))
+		calls, _ := drops.snapshot()
+		require.Len(t, calls, 1)
+		require.ErrorIs(t, calls[0].err, ErrBufferFull)
+		require.Equal(t, []string{"everscribe: auto-record failed"}, log.snapshot())
+		st := b.Stats()
+		require.EqualValues(t, 1, st.Dropped)
+		require.Equal(t, st.Dropped, st.DroppedByReason[DropBufferFull])
+	})
+}
+
+func TestBufferedRecorder_AutoRecord_BlockTimeout(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		drops := &dropLog{}
+		b := newDeliverRec(t, &ctxRec{}, drops,
+			WithBufferSize(1), WithFlushSize(1), WithOverflowPolicy(PolicyBlock))
+		fillBuffer(t, b)
+
+		log := &errLog{}
+		ctx, end := event.Begin(t.Context(), &event.Event{}, nil, b, log)
+		cur := event.Current(ctx)
+		cur.Action = "a.scoped"
+		end() // waits out the record timeout
+
+		require.Equal(t, []string{cur.ID}, drops.droppedIDs(DropBufferFull))
+		calls, _ := drops.snapshot()
+		require.Len(t, calls, 1)
+		require.ErrorIs(t, calls[0].err, context.DeadlineExceeded)
+		require.Equal(t, []string{"everscribe: auto-record failed"}, log.snapshot())
+		require.EqualValues(t, 1, b.Stats().Dropped)
+	})
+}
+
+func TestBufferedRecorder_Direct_ErrorPolicyNoReport(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		drops := &dropLog{}
+		b := newDeliverRec(t, &ctxRec{}, drops,
+			WithBufferSize(1), WithFlushSize(1), WithOverflowPolicy(PolicyError))
+		fillBuffer(t, b)
+
+		require.ErrorIs(t, b.Record(t.Context(), event.New("a.direct")), ErrBufferFull)
+		calls, _ := drops.snapshot()
+		require.Empty(t, calls)
+		require.Zero(t, b.Stats().Dropped)
+	})
+}
+
+func TestBufferedRecorder_Direct_BlockCtxNoReport(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		drops := &dropLog{}
+		b := newDeliverRec(t, &ctxRec{}, drops,
+			WithBufferSize(1), WithFlushSize(1), WithOverflowPolicy(PolicyBlock))
+		fillBuffer(t, b)
+
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		require.ErrorIs(t, b.Record(ctx, event.New("a.direct")), context.Canceled)
+		calls, _ := drops.snapshot()
+		require.Empty(t, calls)
+		require.Zero(t, b.Stats().Dropped)
 	})
 }

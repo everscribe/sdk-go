@@ -28,20 +28,21 @@ func WithOnDrop(fn func(events []event.Event, reason DropReason, err error)) Buf
 }
 
 // reportDrop counts dropped events and calls the onDrop callback. Every
-// drop goes through here. It takes no locks.
-func (b *BufferedRecorder) reportDrop(events []event.Event, reason DropReason, err error) {
+// drop goes through here. It takes no locks. For buffer_full it returns
+// the dropped total after this report, otherwise 0.
+func (b *BufferedRecorder) reportDrop(events []event.Event, reason DropReason, err error) (dropped int64) {
 	if len(events) == 0 {
-		return
+		return 0
 	}
 	n := int64(len(events))
 	if c, ok := b.dropCounts[reason]; ok {
 		c.Add(n)
 	}
 	if reason == DropBufferFull {
-		b.dropped.Add(n)
+		dropped = b.dropped.Add(n)
 	}
 	if b.cfg.onDrop == nil {
-		return
+		return dropped
 	}
 	cp := append([]event.Event(nil), events...)
 	defer func() {
@@ -50,4 +51,5 @@ func (b *BufferedRecorder) reportDrop(events []event.Event, reason DropReason, e
 		}
 	}()
 	b.cfg.onDrop(cp, reason, err)
+	return dropped
 }

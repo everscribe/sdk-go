@@ -85,3 +85,11 @@ func TestReportDrop_BufferFullMovesDropped(t *testing.T) {
 	require.Equal(t, st.Dropped, st.DroppedByReason[DropBufferFull])
 	require.Equal(t, int64(1), st.DroppedByReason[DropRejected])
 }
+
+func TestReportDrop_ReturnsBufferFullTotal(t *testing.T) {
+	t.Parallel()
+	b := newTestBuffered(t, &captureRec{})
+	require.Equal(t, int64(1), b.reportDrop([]event.Event{{Action: "a"}}, DropBufferFull, nil))
+	require.Equal(t, int64(3), b.reportDrop([]event.Event{{Action: "a"}, {Action: "b"}}, DropBufferFull, nil))
+	require.Zero(t, b.reportDrop([]event.Event{{Action: "a"}}, DropRejected, nil))
+}

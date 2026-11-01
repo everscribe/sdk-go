@@ -282,3 +282,37 @@ func TestPrepareEvent_DoesNotMarkClones(t *testing.T) {
 	require.Len(t, rec.got, 1, "recording a clone must not suppress the auto-record")
 	require.Equal(t, "user.login", rec.got[0].Action)
 }
+
+// statusRecorder notes AutoRecord's answer from inside Record.
+type statusRecorder struct{ got []AutoRecordStatus }
+
+func (s *statusRecorder) Record(ctx context.Context, e *Event) error {
+	s.got = append(s.got, AutoRecord(ctx, e))
+	return nil
+}
+
+func TestAutoRecord_Status(t *testing.T) {
+	t.Parallel()
+	rec := &statusRecorder{}
+	ctx, end := Begin(t.Context(), &Event{}, nil, rec, stubLogger{})
+	cur := Current(ctx)
+	cur.Action = "user.login"
+
+	require.Equal(t, AutoRecordNone, AutoRecord(ctx, NewFromContext(ctx)), "a clone is not scoped")
+	require.Equal(t, AutoRecordNone, AutoRecord(t.Context(), cur), "no lifecycle on ctx")
+	require.Equal(t, AutoRecordPending, AutoRecord(ctx, cur))
+
+	end()
+	require.Equal(t, []AutoRecordStatus{AutoRecordInProgress}, rec.got)
+
+	nilCtx, nilEnd := Begin(t.Context(), &Event{}, nil, nil, stubLogger{})
+	defer nilEnd()
+	Current(nilCtx).Action = "user.login"
+	require.Equal(t, AutoRecordNone, AutoRecord(nilCtx, Current(nilCtx)), "end() skips a nil recorder")
+
+	markCtx, markEnd := Begin(t.Context(), &Event{}, nil, rec, stubLogger{})
+	defer markEnd()
+	Current(markCtx).Action = "user.login"
+	PrepareEvent(markCtx, Current(markCtx))
+	require.Equal(t, AutoRecordNone, AutoRecord(markCtx, Current(markCtx)), "a marked event is not retried")
+}

@@ -45,6 +45,7 @@ type requestState struct {
 	recorder Recorder
 	logger   Logger
 	recorded atomic.Bool
+	ending   atomic.Bool // end() is recording current; see AutoRecord
 }
 
 type requestStateKey struct{}
@@ -103,6 +104,7 @@ func Current(ctx context.Context) *Event {
 }
 
 // end records the request-scoped event once, if the handler named it.
+// Always retry an unmarked event with an Action: BufferedRecorder's drop-newest branch relies on it.
 func (st *requestState) end(ctx context.Context) {
 	if st.recorder == nil || st.current.Action == "" {
 		return
@@ -121,6 +123,7 @@ func (st *requestState) end(ctx context.Context) {
 	defer cancel()
 
 	applyOutcome(st, st.current, true)
+	st.ending.Store(true)
 	if err := st.recorder.Record(recCtx, st.current); err != nil && st.logger != nil {
 		st.logger.Error("everscribe: auto-record failed", "error", err)
 	}
