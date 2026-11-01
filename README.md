@@ -158,7 +158,7 @@ Serve the token from a `POST` route behind your app's authentication, with `Cach
 | Network error, timeout, `429` or `5xx` | Retried with jittered exponential backoff: 500ms first wait, 30s max wait, server `Retry-After` honored up to that cap. After 5 minutes the batch is dropped as `retries_exhausted`. Tune with `WithInitialBackoff`, `WithMaxBackoff` and `WithMaxRetryDuration`. |
 | `400`, `409` or `413` | The batch is split in half and each half retried, so one bad event does not sink the rest. An event the server still refuses is dropped as `rejected`. |
 | Any other `4xx` | The whole batch is dropped as `rejected`. |
-| Buffer full | Set by the overflow policy. `PolicyDropNewest` (default) drops the new event as `buffer_full`, `PolicyBlock` makes `Record` wait for space, `PolicyError` returns `ErrBufferFull`. |
+| Buffer full | Depends on the overflow policy. `PolicyDropNewest` (default) drops the new event as `buffer_full`, `PolicyBlock` makes `Record` wait for space, `PolicyError` returns `ErrBufferFull`. |
 | `Close` drain timeout | The in-flight send is canceled and what is left is dropped as `shutdown`. |
 | `Record` after `Close` | The event is dropped as `closed`, as is a `PolicyBlock` wait that `Close` ends. |
 
@@ -173,7 +173,7 @@ rec := recorder.New(projectID, apiKey,
 ```
 
 - `reason` is `buffer_full`, `rejected`, `retries_exhausted`, `shutdown` or `closed`.
-- `err` is the last delivery error for `rejected` and `retries_exhausted`, the overflow error for a `buffer_full` drop from the middleware's own record, and nil otherwise.
+- `err` is the last delivery error for `rejected` and `retries_exhausted`, the overflow error for a `buffer_full` drop that happens when the middleware records the request event, and nil otherwise.
 - The callback must not block and must not call `Record`, `Flush` or `Close` on the same recorder. It may run on several goroutines at once, so make it safe for concurrent use.
 - A dropped event may have been delivered anyway, for example when the response was lost. Resending it with its original ID is safe: the server deduplicates it.
 - Delivered events are immutable. Dropped events cannot be recovered, so route `onDrop` to your own logs or queue.
@@ -183,6 +183,8 @@ rec := recorder.New(projectID, apiKey,
 **Give `Flush` a deadline.** `Flush` returns `nil` once the events queued at the call are delivered or reported to `onDrop`, or `ctx.Err()` if your context ends first. It does not return delivery errors and never cancels a send. Retries during an outage can take minutes, so use `context.WithTimeout`.
 
 **Watch `Stats()`.** `DroppedByReason` counts drops per reason, `Retries` counts retries, and `Dropped` counts only `buffer_full` drops.
+
+For the split budget, callback goroutines and middleware edge cases, see [Delivery details](https://everscribe.io/docs/sdks/go-buffered-recorder#delivery-details).
 
 ## Go SDK reference
 

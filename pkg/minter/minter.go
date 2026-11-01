@@ -115,9 +115,9 @@ type TokenOptions struct {
 	// Rejected if empty after trim or > 256 chars.
 	TenantID string
 
-	// ExpiresIn requests a token lifetime. The server clamps to
-	// [MinExpiresIn, MaxExpiresIn]. Zero uses the server default
-	// (1 hour).
+	// ExpiresIn requests a token lifetime. Values outside
+	// [MinExpiresIn, MaxExpiresIn] are rejected before any request.
+	// Zero uses the server default (1 hour).
 	ExpiresIn time.Duration
 
 	// AllowedColumns whitelists Event field names (JSON tags) the
