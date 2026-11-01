@@ -100,8 +100,8 @@ func WithBufferSize(n int) BufferedOption {
 }
 
 // WithFlushSize sets the number of events that triggers an immediate
-// flush. The background goroutine flushes when pending events reach
-// this size, without waiting for the flush interval. Default 100.
+// flush, and caps every send, including Flush and the Close drain.
+// Default 100.
 func WithFlushSize(n int) BufferedOption {
 	return func(c *bufferedConfig) { c.flushSize = n }
 }
@@ -203,7 +203,11 @@ type BufferedRecorder struct {
 	// dropCounts is built once in the constructor and never mutated.
 	dropCounts map[DropReason]*atomic.Int64
 
-	flushReq chan chan error
+	// workCtx bounds every send; only Close cancels it.
+	workCtx    context.Context
+	cancelWork context.CancelFunc
+
+	flushReq chan chan struct{}
 	done     chan struct{}
 	stop     chan struct{}
 	stopOnce sync.Once
@@ -220,12 +224,15 @@ func NewBufferedRecorder(inner Recorder, opts ...BufferedOption) *BufferedRecord
 	for _, r := range allDropReasons {
 		counts[r] = new(atomic.Int64)
 	}
+	workCtx, cancelWork := context.WithCancel(context.Background())
 	b := &BufferedRecorder{
 		dropCounts: counts,
 		inner:      inner,
 		cfg:        cfg,
 		events:     make(chan event.Event, cfg.bufferSize),
-		flushReq:   make(chan chan error),
+		workCtx:    workCtx,
+		cancelWork: cancelWork,
+		flushReq:   make(chan chan struct{}),
 		done:       make(chan struct{}),
 		stop:       make(chan struct{}),
 	}
@@ -293,21 +300,26 @@ func (b *BufferedRecorder) Record(ctx context.Context, e *event.Event) error {
 	}
 }
 
-// Flush forces an immediate flush of events buffered at the time of the
-// call, blocking until they're persisted to the inner Recorder or ctx
-// is canceled. Events enqueued after the call are not guaranteed to be
-// included.
+// Flush sends the events buffered at the time of the call, in batches
+// of up to the flush size with the usual retries, and blocks until each
+// is delivered or reported to the drop callback. Events enqueued after
+// the call are not guaranteed to be included.
 //
-// Returns nil on success, ctx.Err() on cancellation, or the inner
-// Recorder's error on flush failure. Calling Flush after Close is a
-// no-op returning nil.
+// Returns nil once they are resolved, including when some were dropped,
+// or ctx.Err() if ctx ends first. Ending ctx never cancels a send: the
+// events stay queued and the background goroutine keeps delivering them.
+// Always pass a ctx with a deadline, since retries during an outage can
+// take minutes. Calling Flush after Close is a no-op returning nil.
 func (b *BufferedRecorder) Flush(ctx context.Context) error {
 	select {
 	case <-b.stop:
 		return nil
 	default:
 	}
-	ack := make(chan error, 1)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	ack := make(chan struct{})
 	select {
 	case b.flushReq <- ack:
 	case <-ctx.Done():
@@ -316,8 +328,8 @@ func (b *BufferedRecorder) Flush(ctx context.Context) error {
 		return nil
 	}
 	select {
-	case err := <-ack:
-		return err
+	case <-ack:
+		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -367,98 +379,122 @@ type BufferedStats struct {
 	BufferSize      int                  // buffer capacity
 }
 
-// run is the background goroutine that drains events and flushes on
-// size/time thresholds, then drains remaining events on shutdown.
+// flushWaiter is a pending Flush: ack closes once left more events are
+// delivered or reported.
+type flushWaiter struct {
+	left int
+	ack  chan struct{}
+}
+
+// run is the background goroutine. It sends batches of up to flushSize
+// on the size and time thresholds, sends back to back while a Flush is
+// pending, and drains the buffer on shutdown.
 func (b *BufferedRecorder) run() {
 	defer close(b.done)
+	defer b.cancelWork()
 
 	batch := make([]event.Event, 0, b.cfg.flushSize)
+	var waiters []*flushWaiter
 	ticker := time.NewTicker(b.cfg.flushInterval)
 	defer ticker.Stop()
 
-	flush := func() error {
-		if len(batch) == 0 {
-			return nil
+	// fill tops batch up from the buffer without blocking.
+	fill := func() {
+		for len(batch) < b.cfg.flushSize {
+			select {
+			case e := <-b.events:
+				batch = append(batch, e)
+			default:
+				return
+			}
 		}
-		err := b.flushBatch(batch)
+	}
+	// send resolves batch, then credits the events to pending Flushes.
+	send := func() {
+		n := len(batch)
+		if n == 0 {
+			return
+		}
+		if rem, err := b.deliver(b.workCtx, batch); err != nil {
+			b.cfg.logger.Error("recorder dropped events",
+				"reason", string(DropShutdown), "count", len(rem), "error", err)
+			b.reportDrop(rem, DropShutdown, err)
+		}
 		batch = batch[:0]
-		return err
+		kept := waiters[:0]
+		for _, w := range waiters {
+			if w.left -= n; w.left > 0 {
+				kept = append(kept, w)
+			} else {
+				close(w.ack)
+			}
+		}
+		clear(waiters[len(kept):])
+		waiters = kept
+	}
+	// wait counts what is queued now: the held batch plus the buffer.
+	wait := func(ack chan struct{}) {
+		n := len(batch) + len(b.events)
+		if n == 0 {
+			close(ack)
+			return
+		}
+		waiters = append(waiters, &flushWaiter{left: n, ack: ack})
+	}
+	shutdown := func() {
+		for {
+			fill()
+			if len(batch) == 0 {
+				break
+			}
+			send()
+		}
+		for _, w := range waiters {
+			close(w.ack)
+		}
 	}
 
 	for {
+		if len(waiters) > 0 {
+			select {
+			case ack := <-b.flushReq:
+				wait(ack)
+			case <-b.stop:
+				shutdown()
+				return
+			default:
+				fill()
+				if len(batch) == 0 { // counts are exact; guard against a spin
+					for _, w := range waiters {
+						close(w.ack)
+					}
+					waiters = nil
+				}
+				send()
+			}
+			continue
+		}
+
 		select {
 		case e := <-b.events:
 			batch = append(batch, e)
 			if len(batch) >= b.cfg.flushSize {
-				_ = flush()
+				send()
 			}
 
 		case <-ticker.C:
-			_ = flush()
+			send()
 
 		case ack := <-b.flushReq:
-			// Drain anything currently in the channel so the synchronous
-			// flush includes events that were enqueued just before the
-			// caller's Flush.
-		drain:
-			for {
-				select {
-				case e := <-b.events:
-					batch = append(batch, e)
-				default:
-					break drain
-				}
-			}
-			ack <- flush()
+			wait(ack)
 
 		case <-b.stop:
-			// Drain whatever's already in the channel. Record calls
-			// racing with stop see the closed stop chan and bail out.
-			for {
-				select {
-				case e := <-b.events:
-					batch = append(batch, e)
-					if len(batch) >= b.cfg.flushSize {
-						_ = flush()
-					}
-				default:
-					_ = flush()
-					return
-				}
-			}
+			// Record calls racing with stop see the closed stop chan
+			// and bail out.
+			shutdown()
+			return
 		}
 	}
-}
-
-func (b *BufferedRecorder) flushBatch(batch []event.Event) error {
-	n := len(batch)
-	if n == 0 {
-		return nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), b.cfg.flushTimeout)
-	defer cancel()
-
-	var err error
-	if br, ok := b.inner.(BatchRecorder); ok {
-		err = br.RecordBatch(ctx, batch)
-	} else {
-		for i := range batch {
-			if ierr := b.inner.Record(ctx, &batch[i]); ierr != nil {
-				err = ierr
-				// continue the loop - one failure should not abort the batch
-			}
-		}
-	}
-	if err != nil {
-		b.flushErrs.Add(1)
-		b.cfg.logger.Error("recorder flush failed",
-			"error", err,
-			"batch_size", n,
-			"flush_errs_total", b.flushErrs.Load())
-		return err
-	}
-	b.flushed.Add(int64(n))
-	return nil
 }
 
 var _ Recorder = (*BufferedRecorder)(nil)

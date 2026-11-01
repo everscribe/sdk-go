@@ -2,6 +2,7 @@ package recorder
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/everscribe/sdk-go/pkg/event"
@@ -52,12 +53,17 @@ func (d *delivery) send(p []event.Event) ([]event.Event, error) {
 			return retry, cerr
 		}
 		d.b.flushErrs.Add(1)
-		cfg.logger.Warn("recorder delivery attempt failed",
+		splits := len(retry) > 1 && isSplittable(err)
+		level := slog.LevelWarn
+		if splits {
+			level = slog.LevelDebug // the split resolves it; drops log at Error
+		}
+		cfg.logger.Log(d.ctx, level, "recorder delivery attempt failed",
 			"error", err, "batch_size", len(p), "attempt", n)
 		switch {
 		case len(retry) == 0:
 			return nil, nil
-		case len(retry) > 1 && isSplittable(err):
+		case splits:
 			d.splitErr = err
 			return d.split(retry)
 		case !isRetryable(err):

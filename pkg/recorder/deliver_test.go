@@ -1,15 +1,18 @@
 package recorder
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"slices"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -683,5 +686,41 @@ func TestDeliver_CtxCancelMidSplitKeepsOrder(t *testing.T) {
 		require.Equal(t, []string{"e000", "e001"}, delivered)
 		dc, _ := drops.snapshot()
 		require.Empty(t, dc)
+	})
+}
+
+func TestDeliver_SplitLogsAtDebug(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		batch := mkEvents(4)
+		batch[0].ID = "bad"
+		inner := &scriptedRec{fn: func(_ int, ids []string) error {
+			if slices.Contains(ids, "bad") {
+				return err400
+			}
+			return nil
+		}}
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		b := newDeliverRec(t, inner, &dropLog{}, WithSlogLogger(logger))
+
+		_, err := b.deliver(t.Context(), batch)
+		require.NoError(t, err)
+
+		var debug, warn []string
+		for _, line := range strings.Split(buf.String(), "\n") {
+			if !strings.Contains(line, "recorder delivery attempt failed") {
+				continue
+			}
+			switch {
+			case strings.Contains(line, "level=DEBUG"):
+				debug = append(debug, line)
+			case strings.Contains(line, "level=WARN"):
+				warn = append(warn, line)
+			}
+		}
+		require.Len(t, debug, 2, "the 4- and 2-event rejections split")
+		require.Len(t, warn, 1, "only the single-event rejection warns")
+		require.Contains(t, warn[0], "batch_size=1")
 	})
 }

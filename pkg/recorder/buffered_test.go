@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/everscribe/sdk-go/pkg/event"
@@ -20,7 +21,7 @@ func silentLogger() *slog.Logger {
 }
 
 // captureRec implements only Recorder. Used to exercise the looped-Record
-// fallback path in flushBatch.
+// fallback path in deliver.
 type captureRec struct {
 	mu      sync.Mutex
 	records []event.Event
@@ -184,18 +185,22 @@ func TestBufferedRecorder_Flush_FallsBackToSerialRecord(t *testing.T) {
 	require.Equal(t, 3, calls, "non-BatchRecorder inner should be called once per event")
 }
 
-func TestBufferedRecorder_Flush_PropagatesInnerError(t *testing.T) {
+func TestBufferedRecorder_Flush_RejectedDoesNotFail(t *testing.T) {
 	t.Parallel()
 	want := errors.New("inner failed")
 	inner := &captureBatchRec{}
 	inner.batchErr = want
+	drops := &dropLog{}
 
-	b := newTestBuffered(t, inner)
-	require.NoError(t, b.Record(t.Context(), event.New("a.one")))
+	b := newTestBuffered(t, inner, drops.opt())
+	e := event.New("a.one")
+	require.NoError(t, b.Record(t.Context(), e))
 
-	err := b.Flush(t.Context())
-	require.ErrorIs(t, err, want)
+	require.NoError(t, b.Flush(t.Context()), "a drop must not fail Flush")
 	require.Equal(t, int64(1), b.Stats().FlushErrs)
+	require.Equal(t, []string{e.ID}, drops.droppedIDs(DropRejected))
+	calls, _ := drops.snapshot()
+	require.ErrorIs(t, calls[0].err, want)
 }
 
 func TestBufferedRecorder_Flush_RespectsCtxCancel(t *testing.T) {
@@ -541,4 +546,160 @@ func TestBufferedRecorder_DroppedEvent_IsNotMarkedRecorded(t *testing.T) {
 		}
 		return false
 	}, time.Second, 5*time.Millisecond, "the dropped event must still be recorded by end() once the buffer has room")
+}
+
+// recordN records n events and returns their IDs in record order.
+func recordN(t *testing.T, b *BufferedRecorder, n int) []string {
+	t.Helper()
+	ids := make([]string, n)
+	for i := range ids {
+		e := event.New("a.test")
+		require.NoError(t, b.Record(t.Context(), e))
+		ids[i] = e.ID
+	}
+	return ids
+}
+
+// slowRec takes delay per call and notes whether its ctx was cancelled.
+type slowRec struct {
+	delay     time.Duration
+	mu        sync.Mutex
+	delivered []string
+	cancelled []bool
+}
+
+func (s *slowRec) Record(ctx context.Context, e *event.Event) error {
+	return s.RecordBatch(ctx, []event.Event{*e})
+}
+
+func (s *slowRec) RecordBatch(ctx context.Context, events []event.Event) error {
+	time.Sleep(s.delay)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cancelled = append(s.cancelled, ctx.Err() != nil)
+	s.delivered = append(s.delivered, eventIDs(events)...)
+	return nil
+}
+
+func (s *slowRec) snapshot() (delivered []string, cancelled []bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.delivered...), append([]bool(nil), s.cancelled...)
+}
+
+func TestBufferedRecorder_OrderingDuringRetry(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		inner := &scriptedRec{fn: seq(err503, err503)}
+		drops := &dropLog{}
+		b := newDeliverRec(t, inner, drops, WithFlushSize(3))
+
+		first := recordN(t, b, 3)
+		synctest.Wait() // the first batch failed and is parked in backoff
+		second := recordN(t, b, 3)
+		require.NoError(t, b.Flush(t.Context()))
+
+		calls, _, delivered := inner.snapshot()
+		require.Equal(t, append(first, second...), delivered)
+		require.Equal(t, [][]string{first, first, first, second}, calls)
+		dc, _ := drops.snapshot()
+		require.Empty(t, dc)
+	})
+}
+
+func TestBufferedRecorder_Flush_SendsBatchesOfFlushSize(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		gate := make(chan struct{})
+		inner := &scriptedRec{fn: func(n int, _ []string) error {
+			if n == 0 {
+				<-gate
+			}
+			return nil
+		}}
+		drops := &dropLog{}
+		b := newDeliverRec(t, inner, drops, WithFlushSize(100))
+
+		// The first 100 go out on the size threshold and hold the worker,
+		// so the other 150 are still queued when Flush is called.
+		ids := recordN(t, b, 100)
+		synctest.Wait()
+		ids = append(ids, recordN(t, b, 150)...)
+
+		done := make(chan error, 1)
+		go func() { done <- b.Flush(t.Context()) }()
+		synctest.Wait()
+		close(gate)
+		require.NoError(t, <-done)
+
+		calls, _, delivered := inner.snapshot()
+		var sizes []int
+		for _, c := range calls {
+			sizes = append(sizes, len(c))
+		}
+		require.Equal(t, []int{100, 100, 50}, sizes)
+		require.Equal(t, ids, delivered, "batches go out in record order")
+	})
+}
+
+func TestBufferedRecorder_Flush_ShortCtxDoesNotCancelSend(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		inner := &slowRec{delay: 200 * time.Millisecond}
+		b := newTestBuffered(t, inner)
+		ids := recordN(t, b, 1)
+
+		ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+		defer cancel()
+		require.ErrorIs(t, b.Flush(ctx), context.DeadlineExceeded)
+
+		require.NoError(t, b.Flush(t.Context()))
+		delivered, cancelled := inner.snapshot()
+		require.Equal(t, ids, delivered)
+		require.Equal(t, []bool{false}, cancelled)
+	})
+}
+
+func TestBufferedRecorder_Flush_RepeatedShortFlushesDeliverAll(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		inner := &slowRec{delay: 50 * time.Millisecond}
+		drops := &dropLog{}
+		b := newDeliverRec(t, inner, drops)
+
+		var ids []string
+		for range 10 {
+			ids = append(ids, recordN(t, b, 1)...)
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
+			_ = b.Flush(ctx)
+			cancel()
+		}
+
+		require.NoError(t, b.Flush(t.Context()))
+		delivered, cancelled := inner.snapshot()
+		require.Equal(t, ids, delivered)
+		require.NotContains(t, cancelled, true)
+		dc, _ := drops.snapshot()
+		require.Empty(t, dc)
+	})
+}
+
+func TestBufferedRecorder_BufferFullDuringOutage(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		inner := &scriptedRec{fn: always(err503)}
+		drops := &dropLog{}
+		b := newDeliverRec(t, inner, drops,
+			WithBufferSize(5),
+			WithFlushSize(1),
+			WithMaxRetryDuration(time.Second))
+
+		ids := recordN(t, b, 1)
+		synctest.Wait() // the worker holds the first event in its retry loop
+		ids = append(ids, recordN(t, b, 19)...)
+
+		// ids[1:6] fill the buffer; the remaining 14 overflow.
+		require.Equal(t, ids[6:], drops.droppedIDs(DropBufferFull))
+		require.EqualValues(t, 14, b.Stats().Dropped)
+	})
 }
