@@ -25,12 +25,13 @@ var (
 type OverflowPolicy int
 
 const (
-	// PolicyDropNewest silently discards the incoming event and increments
-	// the dropped counter. Emits a slog warning on the first drop and
-	// every 1000th subsequent drop. Default policy - keeps the request
-	// path fast at the cost of losing events under sustained pressure.
-	// Operators should monitor the dropped counter and resize the buffer
-	// (or downstream throughput) when it grows.
+	// PolicyDropNewest discards the incoming event, increments the dropped
+	// counter, and reports it to the drop callback as buffer_full. Emits a
+	// slog warning on the first drop and every 1000th subsequent drop.
+	// Default policy - keeps the request path fast at the cost of losing
+	// events under sustained pressure. Operators should monitor the
+	// dropped counter and resize the buffer (or downstream throughput)
+	// when it grows.
 	PolicyDropNewest OverflowPolicy = iota
 
 	// PolicyBlock blocks the caller until space is available in the
@@ -104,9 +105,13 @@ func WithBufferSize(n int) BufferedOption {
 
 // WithFlushSize sets the number of events that triggers an immediate
 // flush, and caps every send, including Flush and the Close drain.
-// Default 100.
+// Values <= 0 keep the default of 100.
 func WithFlushSize(n int) BufferedOption {
-	return func(c *bufferedConfig) { c.flushSize = n }
+	return func(c *bufferedConfig) {
+		if n > 0 {
+			c.flushSize = n
+		}
+	}
 }
 
 // WithFlushInterval sets the maximum time between flushes. Events are
@@ -116,8 +121,9 @@ func WithFlushInterval(d time.Duration) BufferedOption {
 	return func(c *bufferedConfig) { c.flushInterval = d }
 }
 
-// WithFlushTimeout sets the context timeout used for each flush call
-// to the inner Recorder. Default 30 seconds.
+// WithFlushTimeout sets the context timeout for each delivery attempt
+// to the inner Recorder; every retry gets a fresh timeout. Default 30
+// seconds.
 func WithFlushTimeout(d time.Duration) BufferedOption {
 	return func(c *bufferedConfig) { c.flushTimeout = d }
 }
@@ -128,10 +134,10 @@ func WithOverflowPolicy(p OverflowPolicy) BufferedOption {
 	return func(c *bufferedConfig) { c.overflow = p }
 }
 
-// WithDrainTimeout sets the maximum time Close will wait for in-flight
-// events to flush. Events remaining after the timeout are reported to
-// the drop callback as shutdown.
-// Default 30 seconds.
+// WithDrainTimeout sets how long Close waits for pending events to
+// flush. Events remaining after the timeout are reported to the drop
+// callback as shutdown. Close then cancels the in-flight send and waits
+// up to 1s more, so it can take drainTimeout + 1s. Default 30 seconds.
 func WithDrainTimeout(d time.Duration) BufferedOption {
 	return func(c *bufferedConfig) { c.drainTimeout = d }
 }
@@ -193,7 +199,7 @@ func WithSlogLogger(l *slog.Logger) BufferedOption {
 // otherwise.
 //
 // Call Close to drain pending events and stop the background goroutine;
-// only the first call has effect.
+// only the first call has effect, and later calls wait for it.
 type BufferedRecorder struct {
 	inner  Recorder
 	cfg    bufferedConfig
@@ -218,7 +224,8 @@ type BufferedRecorder struct {
 	done     chan struct{}
 	stop     chan struct{} // closed first by Close; Record stops sending
 	drain    chan struct{} // closed once no send can follow; worker drains
-	closed   chan struct{} // closed when the first Close returns
+	closed   chan struct{} // closed once closeErr is set by the first Close
+	closeErr error
 	stopOnce sync.Once
 }
 
@@ -392,7 +399,8 @@ func (b *BufferedRecorder) Flush(ctx context.Context) error {
 // the in-flight send, reports what is left as shutdown, and returns
 // context.DeadlineExceeded. An inner Recorder that ignores ctx gets a
 // 1s grace; its in-flight batch is then reported when the call returns.
-// Only the first call has effect; later calls return nil.
+// Only the first call has effect; later calls wait for it and return
+// its result.
 func (b *BufferedRecorder) Close() error {
 	first := false
 	b.stopOnce.Do(func() {
@@ -400,10 +408,26 @@ func (b *BufferedRecorder) Close() error {
 		close(b.stop) // releases PolicyBlock waiters
 	})
 	if !first {
-		return nil
+		<-b.closed
+		return b.closeErr
 	}
-	defer close(b.closed)
+	left, err := b.closeDrain()
+	b.closeErr = err
+	// closed is closed before reporting left, so an onDrop that calls
+	// Close here does not wait on itself.
+	close(b.closed)
+	if len(left) > 0 {
+		b.cfg.logger.Error("recorder dropped events",
+			"reason", string(DropShutdown), "count", len(left), "error", err)
+		b.reportDrop(left, DropShutdown, nil)
+	}
+	return err
+}
 
+// closeDrain runs the first Close. Every wait in it is bounded by a
+// timer, so it returns even if the worker never does. left is the queue
+// taken when the worker ignored cancellation.
+func (b *BufferedRecorder) closeDrain() (left []event.Event, err error) {
 	// Wait out every Record already past its stop check.
 	b.mu.Lock()
 	b.mu.Unlock() //nolint:staticcheck // empty critical section is the point
@@ -413,7 +437,7 @@ func (b *BufferedRecorder) Close() error {
 	defer drain.Stop()
 	select {
 	case <-b.done:
-		return nil
+		return nil, nil
 	case <-drain.C:
 	}
 
@@ -422,12 +446,11 @@ func (b *BufferedRecorder) Close() error {
 	defer grace.Stop()
 	select {
 	case <-b.done:
-		return context.DeadlineExceeded
+		return nil, context.DeadlineExceeded
 	case <-grace.C:
 	}
 
-	// The inner Recorder ignores ctx: report the queue and return.
-	var left []event.Event
+	// The inner Recorder ignores ctx: take the queue to report.
 queue:
 	for {
 		select {
@@ -437,12 +460,7 @@ queue:
 			break queue
 		}
 	}
-	if len(left) > 0 {
-		b.cfg.logger.Error("recorder dropped events",
-			"reason", string(DropShutdown), "count", len(left), "error", context.DeadlineExceeded)
-		b.reportDrop(left, DropShutdown, nil)
-	}
-	return context.DeadlineExceeded
+	return left, context.DeadlineExceeded
 }
 
 // Stats returns cumulative counters for observability.

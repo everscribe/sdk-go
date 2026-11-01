@@ -279,6 +279,121 @@ func TestBufferedRecorder_Close_Idempotent(t *testing.T) {
 	require.NoError(t, b.Close(), "second Close should be a no-op")
 }
 
+func TestBufferedRecorder_Close_ConcurrentWaitsForFirst(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		inner   Recorder
+		wantErr error
+	}{
+		{name: "drain completes", inner: &slowRec{delay: 100 * time.Millisecond}},
+		{name: "drain times out", inner: &ctxRec{}, wantErr: context.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				drops := &dropLog{}
+				b := newDeliverRec(t, tc.inner, drops,
+					WithFlushSize(2),
+					WithDrainTimeout(time.Second))
+				ids := recordN(t, b, 6)
+
+				first := make(chan error, 1)
+				go func() { first <- b.Close() }()
+				synctest.Wait() // the first Close is draining
+
+				second := b.Close()
+				select {
+				case <-b.done:
+				default:
+					t.Error("second Close returned while the drain was running")
+				}
+				require.ErrorIs(t, <-first, tc.wantErr)
+				if tc.wantErr == nil {
+					require.NoError(t, second)
+				} else {
+					require.ErrorIs(t, second, tc.wantErr)
+				}
+
+				got := drops.droppedIDs(DropShutdown)
+				if s, ok := tc.inner.(*slowRec); ok {
+					delivered, _ := s.snapshot()
+					got = append(got, delivered...)
+				}
+				require.ElementsMatch(t, ids, got, "every event delivered or reported")
+			})
+		})
+	}
+}
+
+func TestBufferedRecorder_Close_FromOnDropDuringClose(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		inner func(gate chan struct{}) Recorder
+	}{
+		// The worker reports the cancelled batch and its onDrop waits on the first Close.
+		{name: "worker", inner: func(chan struct{}) Recorder { return &ctxRec{} }},
+		// The first Close reports the queue itself and its onDrop calls Close.
+		{name: "close fallback", inner: func(gate chan struct{}) Recorder {
+			return &scriptedRec{fn: func(int, []string) error { <-gate; return nil }}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				gate := make(chan struct{})
+				defer close(gate)
+				var b *BufferedRecorder
+				nested := make(chan error, 8)
+				b = newTestBuffered(t, tc.inner(gate),
+					WithFlushSize(1),
+					WithDrainTimeout(100*time.Millisecond),
+					WithOnDrop(func(_ []event.Event, r DropReason, _ error) {
+						if r == DropShutdown {
+							nested <- b.Close()
+						}
+					}))
+				recordN(t, b, 1)
+				synctest.Wait() // the worker is stuck in the first send
+				recordN(t, b, 2)
+
+				start := time.Now()
+				require.ErrorIs(t, b.Close(), context.DeadlineExceeded)
+				require.LessOrEqual(t, time.Since(start), 1100*time.Millisecond)
+				require.ErrorIs(t, <-nested, context.DeadlineExceeded)
+			})
+		})
+	}
+}
+
+func TestBufferedRecorder_FlushSizeZero_UsesDefault(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		end  func(*BufferedRecorder) error
+	}{
+		{name: "close", end: func(b *BufferedRecorder) error { return b.Close() }},
+		{name: "flush", end: func(b *BufferedRecorder) error { return b.Flush(context.Background()) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				inner := &slowRec{delay: time.Millisecond}
+				drops := &dropLog{}
+				b := newDeliverRec(t, inner, drops, WithFlushSize(0))
+				ids := recordN(t, b, 50)
+
+				require.NoError(t, tc.end(b))
+				delivered, _ := inner.snapshot()
+				require.ElementsMatch(t, ids, delivered)
+				dc, _ := drops.snapshot()
+				require.Empty(t, dc)
+			})
+		})
+	}
+}
+
 func TestBufferedRecorder_RecordAfterClose_IsDropped(t *testing.T) {
 	t.Parallel()
 	inner := &captureRec{}
@@ -819,6 +934,10 @@ func TestBufferedRecorder_Close_HungRequest(t *testing.T) {
 
 		require.Equal(t, []error{context.Canceled}, inner.snapshot(), "Close cancels the in-flight send")
 		require.Equal(t, ids, drops.droppedIDs(DropShutdown))
+		calls, _ := drops.snapshot()
+		for _, c := range calls {
+			require.NoError(t, c.err, "shutdown drops carry a nil err")
+		}
 		select {
 		case <-b.done:
 		default:
