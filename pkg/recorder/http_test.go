@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/everscribe/sdk-go/pkg/event"
 	"github.com/stretchr/testify/require"
@@ -325,4 +326,34 @@ func TestHTTPRecorder_AutoIdempotencyKey_Batch(t *testing.T) {
 	require.Len(t, got.Events, 2)
 	require.Equal(t, got.Events[0].ID, got.Events[0].IdempotencyKey)
 	require.Equal(t, "explicit-key-2", got.Events[1].IdempotencyKey)
+}
+
+func TestHTTPRecorder_RetryAfterHeader(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		header string
+		want   time.Duration
+	}{
+		{"seconds", "5", 5 * time.Second},
+		{"zero", "0", 0},
+		{"negative", "-5", 0},
+		{"garbage", "abc", 0},
+		{"http date", "Wed, 21 Oct 2015 07:28:00 GMT", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Retry-After", tc.header)
+				w.WriteHeader(http.StatusTooManyRequests)
+			}))
+			t.Cleanup(srv.Close)
+
+			r := NewHTTPRecorder(testProjectID, "key", WithBaseURL(srv.URL))
+			err := r.Record(t.Context(), &event.Event{Action: "a"})
+			var he *HTTPError
+			require.ErrorAs(t, err, &he)
+			require.Equal(t, tc.want, he.RetryAfter)
+		})
+	}
 }

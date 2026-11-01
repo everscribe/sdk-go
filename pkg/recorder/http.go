@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -176,9 +177,14 @@ func (l *HTTPRecorder) post(ctx context.Context, path string, body []byte) error
 	}
 
 	buf, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	var retryAfter time.Duration
+	if n, err := strconv.Atoi(strings.TrimSpace(resp.Header.Get("Retry-After"))); err == nil && n > 0 {
+		retryAfter = time.Duration(n) * time.Second
+	}
 	return &HTTPError{
 		StatusCode: resp.StatusCode,
 		Body:       strings.TrimSpace(string(buf)),
+		RetryAfter: retryAfter,
 	}
 }
 
@@ -188,6 +194,8 @@ func (l *HTTPRecorder) post(ctx context.Context, path string, body []byte) error
 type HTTPError struct {
 	StatusCode int
 	Body       string
+	// RetryAfter is the server's Retry-After seconds; zero if absent or invalid.
+	RetryAfter time.Duration
 }
 
 func (e *HTTPError) Error() string {
