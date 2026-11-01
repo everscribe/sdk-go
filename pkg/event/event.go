@@ -265,7 +265,10 @@ const (
 // be reported once rather than twice. It is for Recorder implementers,
 // not handler code. If a handler records the request-scoped event through
 // a different BufferedRecorder from the middleware's, the final drop is
-// reported by the middleware's recorder.
+// reported by the middleware's recorder. Recording event.Current(ctx)
+// with a ctx that lacks the request (e.g. context.Background()) defeats
+// this, so a drop can be reported and then retried by the middleware;
+// pass the request's ctx.
 func AutoRecord(ctx context.Context, e *Event) AutoRecordStatus {
 	st, _ := ctx.Value(requestStateKey{}).(*requestState)
 	if st == nil || e == nil || e != st.current {
