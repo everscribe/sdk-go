@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math/rand/v2"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -60,6 +61,11 @@ type bufferedConfig struct {
 	drainTimeout  time.Duration
 	logger        *slog.Logger
 	onDrop        func(events []event.Event, reason DropReason, err error)
+
+	initialBackoff   time.Duration
+	maxBackoff       time.Duration
+	maxRetryDuration time.Duration
+	jitter           func(time.Duration) time.Duration
 }
 
 func defaultBufferedConfig() bufferedConfig {
@@ -71,7 +77,20 @@ func defaultBufferedConfig() bufferedConfig {
 		overflow:      PolicyDropNewest,
 		drainTimeout:  30 * time.Second,
 		logger:        slog.Default(),
+
+		initialBackoff:   500 * time.Millisecond,
+		maxBackoff:       30 * time.Second,
+		maxRetryDuration: 5 * time.Minute,
+		jitter:           fullJitter,
 	}
+}
+
+// fullJitter returns a uniform random duration in [0, d].
+func fullJitter(d time.Duration) time.Duration {
+	if d <= 0 {
+		return 0
+	}
+	return time.Duration(rand.Int64N(int64(d) + 1))
 }
 
 // WithBufferSize sets the capacity of the internal event channel.
@@ -111,6 +130,46 @@ func WithOverflowPolicy(p OverflowPolicy) BufferedOption {
 // Default 30 seconds.
 func WithDrainTimeout(d time.Duration) BufferedOption {
 	return func(c *bufferedConfig) { c.drainTimeout = d }
+}
+
+// WithInitialBackoff sets the base wait before the first retry of a
+// failed batch. Values <= 0 keep the default of 500ms.
+func WithInitialBackoff(d time.Duration) BufferedOption {
+	return func(c *bufferedConfig) {
+		if d > 0 {
+			c.initialBackoff = d
+		}
+	}
+}
+
+// WithMaxBackoff caps a single wait between retries. Values <= 0 keep
+// the default of 30 seconds.
+func WithMaxBackoff(d time.Duration) BufferedOption {
+	return func(c *bufferedConfig) {
+		if d > 0 {
+			c.maxBackoff = d
+		}
+	}
+}
+
+// WithMaxRetryDuration sets how long one batch is retried before its
+// events are dropped as retries_exhausted. Values <= 0 keep the default
+// of 5 minutes.
+func WithMaxRetryDuration(d time.Duration) BufferedOption {
+	return func(c *bufferedConfig) {
+		if d > 0 {
+			c.maxRetryDuration = d
+		}
+	}
+}
+
+// withJitter replaces the backoff jitter; tests use it for exact timing.
+func withJitter(fn func(time.Duration) time.Duration) BufferedOption {
+	return func(c *bufferedConfig) {
+		if fn != nil {
+			c.jitter = fn
+		}
+	}
 }
 
 // WithSlogLogger sets the slog.Logger used for BufferedRecorder's
