@@ -13,43 +13,15 @@
 
 # everscribe/sdk-go
 
-Go SDK for the [Everscribe](https://everscribe.io) API. It exposes **middleware**
-that records one audit event per request once your handler names it, a **recorder** for writing append-only
-audit events directly, and a **minter** for issuing short-lived browser tokens
+The official Go SDK for the [Everscribe](https://everscribe.io) API. It exposes **middleware** for hooking events into incoming requests, a **recorder** for writing append-only
+audit events, and a **minter** for issuing short-lived browser tokens
 for [embeddable components](https://github.com/everscribe/components).
 
 </div>
 
-## 📖 Setup Documentation
+## Coding with Claude?
 
-| Setup link | What it is | Pick it when |
-|---|---|---|
-| [Claude Code Setup Skill](https://everscribe.io/docs/quickstart/skill) | Install the [`es` CLI](https://github.com/everscribe/cli) and run `es skills download setup`. That adds a skill to Claude Code, which finds your handlers, proposes audit events, and wires up the SDK for you. | You use Claude Code and want the agent to do the wiring. |
-| [Wire it up yourself](https://everscribe.io/docs/sdks/go-install) | Install the SDK and add the calls by hand. | You want full control, or you are instrumenting a small surface. |
-
-## Install
-
-```sh
-go get github.com/everscribe/sdk-go
-```
-
-Requires Go 1.25 or later.
-
-## Supported frameworks
-
-- `net/http`
-- `chi`
-- `gorilla/mux`
-- `gin`
-- `echo v4`
-- `fiber v3`
-
-> [!NOTE]
-> Interceptors available for gRPC servers. They name each RPC's event after its method, so every RPC is recorded by default.
-
-All adapters live in `pkg/event` and take the same `event.Options`. See [Middleware and interceptors](https://everscribe.io/docs/sdks/go-http-middleware) for the mount call per framework.
-
-Your framework missing? [Open an issue](https://github.com/everscribe/sdk-go/issues).
+Install the [`es` CLI](https://github.com/everscribe/cli) to download the [Claude Code Setup Skill](https://everscribe.io/docs/quickstart/skill), which finds your handlers, proposes audit events, and wires up the SDK and [embeddable component](https://github.com/everscribe/components) for you.
 
 ## Go SDK reference
 
