@@ -24,8 +24,7 @@ for [embeddable components](https://github.com/everscribe/components).
 
 | Setup link | What it is | Pick it when |
 |---|---|---|
-| [Hosted AI agent](https://everscribe.io/docs/quickstart/hosted-ui) | You install our GitHub App. Our server-side agent walks your repo, proposes a plan, and opens a PR you review. | You want zero hand-wiring and are fine granting Everscribe read access to your repo. Paid feature. |
-| [BYOK Claude Code skill](https://everscribe.io/docs/quickstart/skill) | Install the [`es` CLI](https://github.com/everscribe/cli) and run `es skills download setup`. That drops a skill into your Claude Code skills directory, and your own local Claude agent does the setup. Same behavior as the hosted agent, but against *your* Anthropic key, and your source never leaves your machine. | You do not want to grant Everscribe read access to your repo, and/or you want a free option and already have Claude Code. |
+| [BYOK Claude Code skill](https://everscribe.io/docs/quickstart/skill) | Install the [`es` CLI](https://github.com/everscribe/cli) and run `es skills download setup`. That drops a skill into your Claude Code skills directory, and your own local Claude agent does the setup. It runs against your Anthropic key, and your source never leaves your machine. | You already use Claude Code and want the agent to do the wiring. |
 | [Wire it up yourself](https://everscribe.io/docs/sdks/go-install) | Install the SDK and add the calls by hand. | You want full control, or you are instrumenting a small surface. |
 
 ## Supported frameworks
@@ -41,6 +40,46 @@ for [embeddable components](https://github.com/everscribe/components).
 > Interceptors available for gRPC servers.
 
 Your framework missing? [Open an issue](https://github.com/everscribe/sdk-go/issues).
+
+## What happens when delivery fails
+
+**Writing.** `Record` only puts the event on an in-memory buffer. It never waits on the network.
+
+**Outage.** A background worker sends batches. Network errors, timeouts, `429` and `5xx` responses are retried with jittered exponential backoff, starting at 500ms and capped at 30s per wait (a server `Retry-After` is honored, up to that cap). A batch is retried for up to 5 minutes. After that its events are dropped as `retries_exhausted`. Tune this with `WithInitialBackoff`, `WithMaxBackoff` and `WithMaxRetryDuration`.
+
+**Rejected events.** If the server answers `400`, `409` or `413` for a batch of several events, the recorder splits the batch in half and retries each half, so one bad event does not take down its neighbors. Splitting is limited to 32 sends per batch. A single event the server rejects, or one that exhausts that budget, is dropped as `rejected`. A metadata value `json.Marshal` cannot encode (NaN, infinities, channels, funcs) is handled the same way: that event is dropped as `rejected` and the rest of the batch is delivered.
+
+**Buffer full.** The overflow policy decides. `PolicyDropNewest` (the default) discards the new event and counts it, `PolicyBlock` makes `Record` wait for space, and `PolicyError` returns `ErrBufferFull`.
+
+**Knowing about drops.** Pass `WithOnDrop` to hear about every discarded event:
+
+```go
+rec := recorder.New(projectID, apiKey,
+    recorder.WithOnDrop(func(events []event.Event, reason recorder.DropReason, err error) {
+        log.Printf("everscribe: dropped %d events (%s): %v", len(events), reason, err)
+    }),
+)
+```
+
+The reason is one of:
+
+| Reason | Meaning |
+|---|---|
+| `buffer_full` | The buffer had no room: drop-newest, or the middleware's own record hit a `PolicyBlock`/`PolicyError` overflow. |
+| `rejected` | The server refused the event for good, or the split budget ran out. |
+| `retries_exhausted` | `MaxRetryDuration` elapsed while the server or network kept failing. |
+| `shutdown` | `Close` hit its drain timeout with events still pending. |
+| `closed` | The event was recorded after `Close`, or was waiting for buffer space under `PolicyBlock` when `Close` ran. |
+
+`err` is the last delivery error for `rejected` and `retries_exhausted`, and nil otherwise. The callback must not block and must not call `Record`, `Flush` or `Close` on the same recorder. A dropped event may in fact have been delivered (for example, the response was lost), so re-sending it with its original ID is safe: duplicates are deduplicated. `Stats().DroppedByReason` and `Stats().Retries` expose the same information as counters.
+
+**Always call `Close`.** `Close` drains the buffer, retrying as needed, for up to the drain timeout (30s by default). At the timeout it cancels the in-flight send and reports what is left as `shutdown`. A custom inner recorder must honor context cancellation: if it ignores it, `Close` gives up after a further 1s grace and returns, and a late `shutdown` report for the in-flight batch can arrive after it returns.
+
+**Always give `Flush` a deadline.** `Flush` returns `nil` once the events queued at the time of the call are delivered or reported to `onDrop`, and `ctx.Err()` if your context ends first. It does not return delivery errors, and ending your context never cancels a send. Retries during an outage can take minutes, so use `context.WithTimeout`.
+
+**Middleware.** If a handler records the request event through a different `BufferedRecorder` than the one the middleware uses, a final drop of that event is reported by the middleware's recorder.
+
+**Your data once it arrives.** Delivered events are immutable, and you can export them as CSV or JSON or forward them to your SIEM. Events that never arrive cannot be recovered, so route `onDrop` to your own logs or queue.
 
 ## Additional resources
 

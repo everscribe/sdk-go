@@ -21,8 +21,10 @@ var allDropReasons = []DropReason{
 
 // WithOnDrop sets a callback invoked whenever events are discarded.
 // err is the last delivery error for rejected and retries_exhausted,
-// and nil otherwise. The callback must not block; a panic is recovered
-// and logged.
+// and nil otherwise. The callback must not block and must not call
+// Record, Flush, or Close on the same recorder; one running on the worker
+// that calls Close stalls shutdown until the drain timeout. A panic is
+// recovered and logged.
 func WithOnDrop(fn func(events []event.Event, reason DropReason, err error)) BufferedOption {
 	return func(c *bufferedConfig) { c.onDrop = fn }
 }

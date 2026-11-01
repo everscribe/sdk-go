@@ -25,6 +25,23 @@
 // For tests, override the ingestion endpoint with WithBaseURL pointing
 // at an httptest server.
 //
+// # Delivery failures
+//
+// Record never waits on the network. A background worker sends batches
+// and retries network errors, timeouts, 429 and 5xx responses with
+// jittered exponential backoff (WithInitialBackoff 500ms, WithMaxBackoff
+// 30s) for up to WithMaxRetryDuration (5m). A batch rejected with 400,
+// 409 or 413 is split in half to isolate the bad event.
+//
+// Use WithOnDrop to learn about discarded events; each report carries a
+// DropReason: buffer_full, rejected, retries_exhausted, shutdown or
+// closed. The callback must not block or call Record, Flush or Close on
+// the same recorder. A dropped event may have been delivered, and
+// re-sending it with its original ID is safe.
+//
+// Always call Close, and pass Flush a context with a deadline. See
+// BufferedRecorder.Flush and BufferedRecorder.Close for details.
+//
 // # Idempotency
 //
 // Event.IdempotencyKey is for caller-supplied stable keys (webhook
