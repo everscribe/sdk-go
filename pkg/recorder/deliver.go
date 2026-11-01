@@ -41,7 +41,8 @@ func (b *BufferedRecorder) deliver(ctx context.Context, batch []event.Event) (re
 // send resolves part p with the retry loop.
 func (d *delivery) send(p []event.Event) ([]event.Event, error) {
 	cfg := &d.b.cfg
-	final := false
+	// A part first reached after the deadline gets exactly one attempt.
+	final := !time.Now().Before(d.deadline)
 	for n := 1; ; n++ {
 		retry, err := d.attempt(p)
 		if err == nil {

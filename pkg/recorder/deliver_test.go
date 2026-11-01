@@ -410,6 +410,45 @@ func TestDeliver_SplitHalfInheritsDeadline(t *testing.T) {
 	})
 }
 
+func TestDeliver_PartAfterDeadlineGetsOneAttempt(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		// 503 at 0 and 500ms, then the clamped final attempt at 1s gets a
+		// 400, so both halves are first sent after the deadline.
+		inner := &scriptedRec{fn: func(n int, _ []string) error {
+			if n == 2 {
+				return err400
+			}
+			return err503
+		}}
+		drops := &dropLog{}
+		b := newDeliverRec(t, inner, drops,
+			WithInitialBackoff(500*time.Millisecond),
+			WithMaxRetryDuration(time.Second))
+		batch := mkEvents(4)
+		start := time.Now()
+
+		_, err := b.deliver(t.Context(), batch)
+		require.NoError(t, err)
+
+		calls, times, _ := inner.snapshot()
+		require.Equal(t, [][]string{
+			eventIDs(batch), eventIDs(batch), eventIDs(batch),
+			eventIDs(batch[:2]), eventIDs(batch[2:]),
+		}, calls)
+		require.Equal(t, time.Second, times[2].Sub(start))
+		require.EqualValues(t, 2, b.Stats().Retries)
+
+		dc, _ := drops.snapshot()
+		require.Len(t, dc, 2)
+		for i, want := range [][]event.Event{batch[:2], batch[2:]} {
+			require.Equal(t, DropRetriesExhausted, dc[i].reason)
+			require.Equal(t, eventIDs(want), eventIDs(dc[i].events))
+			require.ErrorIs(t, dc[i].err, err503)
+		}
+	})
+}
+
 func TestDeliver_MarshalErrorSplits(t *testing.T) {
 	t.Parallel()
 	var mu sync.Mutex
