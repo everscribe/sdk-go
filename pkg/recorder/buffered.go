@@ -475,6 +475,15 @@ func (b *BufferedRecorder) run() {
 			continue
 		}
 
+		// Take a waiting Flush first so its count starts right after
+		// the batch it waited on, not after one more send.
+		select {
+		case ack := <-b.flushReq:
+			wait(ack)
+			continue
+		default:
+		}
+
 		select {
 		case e := <-b.events:
 			batch = append(batch, e)

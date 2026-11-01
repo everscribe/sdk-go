@@ -200,6 +200,7 @@ func TestBufferedRecorder_Flush_RejectedDoesNotFail(t *testing.T) {
 	require.Equal(t, int64(1), b.Stats().FlushErrs)
 	require.Equal(t, []string{e.ID}, drops.droppedIDs(DropRejected))
 	calls, _ := drops.snapshot()
+	require.Len(t, calls, 1)
 	require.ErrorIs(t, calls[0].err, want)
 }
 
@@ -701,5 +702,69 @@ func TestBufferedRecorder_BufferFullDuringOutage(t *testing.T) {
 		// ids[1:6] fill the buffer; the remaining 14 overflow.
 		require.Equal(t, ids[6:], drops.droppedIDs(DropBufferFull))
 		require.EqualValues(t, 14, b.Stats().Dropped)
+	})
+}
+
+func TestBufferedRecorder_Flush_OverlappingFlushesEachCountTheirOwn(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		// Each send blocks until the test releases it.
+		gates := make([]chan struct{}, 4)
+		for i := range gates {
+			gates[i] = make(chan struct{})
+		}
+		inner := &scriptedRec{fn: func(n int, _ []string) error {
+			<-gates[n]
+			return nil
+		}}
+		drops := &dropLog{}
+		b := newDeliverRec(t, inner, drops, WithFlushSize(2))
+
+		flush := func() chan error {
+			done := make(chan error, 1)
+			go func() { done <- b.Flush(t.Context()) }()
+			return done
+		}
+		returned := func(done chan error) bool {
+			select {
+			case err := <-done:
+				require.NoError(t, err)
+				return true
+			default:
+				return false
+			}
+		}
+
+		ids := recordN(t, b, 2) // call 0 holds the worker
+		synctest.Wait()
+		ids = append(ids, recordN(t, b, 4)...)
+		a := flush() // counts ids[2:6]
+		synctest.Wait()
+
+		close(gates[0]) // A is accepted; call 1 sends ids[2:4]
+		synctest.Wait()
+		ids = append(ids, recordN(t, b, 2)...)
+		bf := flush() // accepted while A is pending; counts ids[4:8]
+		synctest.Wait()
+
+		close(gates[1]) // call 2 sends ids[4:6]
+		synctest.Wait()
+		require.False(t, returned(a), "A still has ids[4:6] in flight")
+		require.False(t, returned(bf))
+
+		close(gates[2]) // A's events are resolved; call 3 sends ids[6:8]
+		synctest.Wait()
+		require.True(t, returned(a), "A must not wait for events recorded after it")
+		require.False(t, returned(bf), "B still has ids[6:8] in flight")
+
+		close(gates[3])
+		synctest.Wait()
+		require.True(t, returned(bf))
+
+		calls, _, delivered := inner.snapshot()
+		require.Equal(t, [][]string{ids[0:2], ids[2:4], ids[4:6], ids[6:8]}, calls)
+		require.Equal(t, ids, delivered)
+		dc, _ := drops.snapshot()
+		require.Empty(t, dc)
 	})
 }
